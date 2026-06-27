@@ -37,7 +37,10 @@
 - [x] 實作 GQA attention（含 KVCache，Option<Tensor> + cat 模式）。
 - [x] 實作 MLP / activation。
 - [x] 實作 KV cache。
-- [ ] 對齊 28 層 hidden shape（需載入真實權重 + Python golden）。
+- [x] Layer 0 golden test：所有 10 個中間張量 cosine similarity = 1.0（通過）。
+  - after_input_layernorm、q/k/v_proj_out、q/k_rope_out、attn_output 等。
+- [x] 發現 crate RMSNorm bug：`mean_keepdim(1)` 在 3D [B,T,D] 輸入時，會對序列維度 T 做歸一化，而非特徵維度 D（應使用 `mean_keepdim(-1)`）。
+- [ ] 修正 crate 的 RMSNorm forward（改為支援任意維度）。
 
 ## Milestone E：RALM / LocEnc（模組實作完成，測試通過）
 

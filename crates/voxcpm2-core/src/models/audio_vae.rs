@@ -415,11 +415,14 @@ mod tests {
         let latent = Tensor::zeros(&[1, 64, 16], DType::F32, &dev)?;
         let waveform = vae.decode(&latent)?;
 
-        // Should produce output: [1, 1, ~16*960 = 15360 samples]
+        // 6 upsampling blocks: rates [8, 6, 5, 2, 2, 2], product = 1920
+        // 16 frames × 1920 = 30720 samples at base rate (16000 Hz)
+        // At out_sample_rate (48000 Hz): 30720 → 92160 via SR upsampling
+        // Total ratio 1920 = 3 × encoder_rates product 640, matching 48000/16000
         let (n, c, samples) = waveform.shape().dims3()?;
         assert_eq!(n, 1, "batch dim");
         assert_eq!(c, 1, "mono audio");
-        assert!(samples > 15000, "expected ~15360 samples, got {samples}");
+        assert!(samples > 30000, "expected ~30720 samples, got {samples}");
         println!("AudioVAE decode shape OK: [{n}, {c}, {samples}]");
         Ok(())
     }
