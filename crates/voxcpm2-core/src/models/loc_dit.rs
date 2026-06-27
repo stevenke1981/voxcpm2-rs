@@ -213,7 +213,7 @@ impl LocDiT {
     }
 
     /// 產生 latent acoustic features。
-    /// cond: [batch, time, hidden_dim] — 條件（來自 TSLM+RALM 的融合特徵）
+    /// cond: [batch, time, feat_dim] — 條件（64-dim acoustic features）
     /// num_steps: 擴散步數
     /// seed: 隨機種子
     pub fn generate(
@@ -224,6 +224,9 @@ impl LocDiT {
     ) -> Result<Tensor> {
         let (batch, time, _cond_dim) = cond.shape().dims3()?;
         let dev = cond.device();
+
+        // 條件投影 (64→1024)
+        let cond_h = self.cond_proj.forward(cond)?;
 
         // 初始噪聲 x_T ~ N(0, 1); Tensor::randn(mean, std, shape, device)
         let x = if let Some(s) = seed {
@@ -243,9 +246,6 @@ impl LocDiT {
 
             // Time embedding (簡單版: sin/cos 編碼)
             let t_embed = self.time_embed(t, dev)?; // [1, 1, hidden_dim]
-
-            // 條件投影
-            let cond_h = self.cond_proj.forward(cond)?;
 
             // 無條件預測 (用全零作為無條件)
             let zeros = Tensor::zeros(&[batch, time, self.hidden_dim], cond.dtype(), dev)?;

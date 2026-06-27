@@ -58,24 +58,26 @@ pub fn auto_device() -> anyhow::Result<Device> {
     Ok(Device::Cpu)
 }
 
-pub fn cuda_device(_id: usize) -> anyhow::Result<Device> {
+pub fn cuda_device(id: usize) -> anyhow::Result<Device> {
     #[cfg(feature = "cuda")]
     {
         return Ok(Device::new_cuda(id)?);
     }
     #[cfg(not(feature = "cuda"))]
     {
+        let _ = id;
         anyhow::bail!("binary was built without cuda feature; rebuild with --no-default-features --features cuda")
     }
 }
 
-pub fn metal_device(_id: usize) -> anyhow::Result<Device> {
+pub fn metal_device(id: usize) -> anyhow::Result<Device> {
     #[cfg(feature = "metal")]
     {
         return Ok(Device::new_metal(id)?);
     }
     #[cfg(not(feature = "metal"))]
     {
+        let _ = id;
         anyhow::bail!("binary was built without metal feature; rebuild with --no-default-features --features metal")
     }
 }

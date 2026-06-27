@@ -60,10 +60,13 @@ pub fn load_audiovae_vb<'a>(model_dir: &'a Path, device: &'a Device) -> Result<V
 /// - `layer.weight_g`: shape [out_channels, 1, 1] (per-channel scalar)
 /// - `layer.weight_v`: shape [out_channels, in_channels, kernel_size]
 ///
-/// Actual weight = weight_g * weight_v (broadcast multiply).
+/// Actual weight = weight_g * weight_v / ||weight_v||_2
+/// where ||·||_2 is computed over the non-channel dimensions (in_channels × kernel_size).
+///
 /// After fusion, the entry `layer.weight` is added and the pair is removed.
 fn fuse_weight_norm(tensors: &mut HashMap<String, Tensor>) -> Result<()> {
     let keys: Vec<String> = tensors.keys().cloned().collect();
+    let mut fused = 0usize;
 
     for key in &keys {
         if let Some(base) = key.strip_suffix(".weight_g") {
@@ -71,13 +74,23 @@ fn fuse_weight_norm(tensors: &mut HashMap<String, Tensor>) -> Result<()> {
             if let Some(weight_v) = tensors.remove(&v_key) {
                 if let Some(weight_g) = tensors.remove(key) {
                     // weight_g: [out, 1, 1] or [out], weight_v: [out, in, k]
-                    // Broadcast multiply: [out, 1, 1] * [out, in, k] = [out, in, k]
-                    let weight = weight_g.broadcast_mul(&weight_v)?;
+                    // Compute ||v||_2 over [in, k] dims, keepdim → [out, 1, 1]
+                    let v_sq = weight_v.sqr()?;
+                    // Chain sum_keepdim over dims 1 and 2 (non-out-channel dims)
+                    let v_norm = v_sq.sum_keepdim(2)?.sum_keepdim(1)?.sqrt()?;
+                    // Normalize: w_correct = g * (v / ||v||)
+                    let weight = weight_g.broadcast_mul(&weight_v.broadcast_div(&v_norm)?)?;
                     tensors.insert(format!("{}.weight", base), weight);
+                    fused += 1;
                 }
             }
-            // Also handle bias (it exists as-is, no norm fusion needed)
         }
+    }
+
+    if fused == 0 {
+        eprintln!("[fuse_weight_norm] WARNING: no weight_g/weight_v pairs found — already fused?");
+    } else {
+        eprintln!("[fuse_weight_norm] fused {fused} weight_norm pairs (with v/||v|| normalization)");
     }
 
     Ok(())

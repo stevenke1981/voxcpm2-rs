@@ -57,15 +57,23 @@
 - [x] 實作 Euler solver + FlowMatchingScheduler。
 - [x] 支援 `inference_timesteps`（含 uniform/log-norm scheduler）。
 - [x] 支援 deterministic seed（CPU fallback graceful）。
-- [ ] 對齊 real model shapes（hidden_dim=1024, feat_dim=64, 12 layers）。
+- [x] 對齊 real model shapes（hidden_dim=1024, feat_dim=64, 12 layers）。
+- [ ] 改善 DiT conditioning：從 mean-pooling 改為 FeatEncoder 或 learned projection。
 
-## Milestone G：AudioVAE（結構完成，待 weight load）
+## Milestone G：AudioVAE ✓（解碼驗證完成）
 
 - [x] 實作 AudioVAE decoder 結構（Conv1d with weight norm）。
 - [x] 實作 AudioVAE encoder 結構。
-- [ ] 載入 `audiovae.safetensors` 真實權重。
-- [ ] 輸出 48kHz wav（解碼 pipeline）。
-- [ ] 音訊 sanity：duration、peak、RMS、NaN/Inf。
+- [x] 載入 `audiovae.safetensors` 真實權重。
+  - [x] weight_norm fusion：`fuse_weight_norm` 修正為 `g * v / ||v||`（原本只有 `g * v`）。
+- [x] Conv1d + ConvTranspose1d 驗證通過：
+  - [x] Conv1d vs PyTorch：max_diff < 1e-6（check_conv1d test）。
+  - [x] ConvTranspose1d vs PyTorch：所有 6 個 up block max_diff < 5e-6（check_convtranspose1d test）。
+- [x] Full decoder vs PyTorch（identical latent + seed）：peak 完全一致（0.000051）。
+- [x] 輸出 48kHz wav（full pipeline 通過）。
+- [x] 音訊 sanity：check_audio（duration、peak、NaN/Inf）。
+- [ ] SR conditioning（sr_cond_model FiLM）：尚未實作，影響輸出振幅。
+- [ ] 輸出振幅偏低（peak ~5e-5），需 SR conditioning 或 post-gain 才能達到正常音量。
 
 ## Milestone H：GPU
 

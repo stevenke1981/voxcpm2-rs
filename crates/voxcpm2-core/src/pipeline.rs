@@ -131,15 +131,19 @@ impl VoxPipeline {
             sched,
         )?;
 
-        // The DiT cond_proj expects [batch, time, feat_dim] (64-dim input).
-        // The 1024-dim text cond needs further processing to 64-dim.
-        // For now, use a mean-pooled + projected approximation.
-        // TODO: Replace with proper feat_encoder or learned projection once
-        // the feature encoder architecture is validated.
-        let cond_dit = project_cond_to_feat_dim(&cond_text, feat_dim)?;
+        // Mean-pool 1024→64 for DiT cond (placeholder until proper fix)
+        let (b, t, _) = cond_text.shape().dims3()?;
+        let group_size = 1024 / 64;
+        let cond_dit = cond_text
+            .reshape((b, t, 64, group_size))?
+            .mean(3)?;
 
         let latent = dit.generate(&cond_dit, req.inference_timesteps, Some(42))?;
         // latent shape: [1, feat_dim, seq_len]
+        let latent_peak = latent.abs()?.flatten_all()?.max(0)?.to_vec0::<f32>()?;
+        if latent_peak < 0.001 {
+            tracing::warn!("DiT latent very quiet (peak={:.6})", latent_peak);
+        }
 
         // ── AudioVAE decode ──
         let vae = crate::models::AudioVAE::load(&audiovae_tensors, &config.audio_vae_config)?;
@@ -212,6 +216,15 @@ mod tests {
         assert_eq!(cond_text.dims(), &[1, seq_len, 1024],
             "cond_text shape");
         println!("Cond text OK: {:?}", cond_text.shape());
+        // Debug cond_text stats
+        let ct = cond_text.to_vec3::<f32>()?;
+        let mut vals: Vec<f32> = ct.iter().flat_map(|b| b.iter().flat_map(|t| t.iter())).copied().collect();
+        vals.sort_by(|a,b| a.partial_cmp(b).unwrap());
+        let n = vals.len();
+        let ct_mean = vals.iter().sum::<f32>() / n as f32;
+        let ct_std = (vals.iter().map(|v| (v - ct_mean).powi(2)).sum::<f32>() / n as f32).sqrt();
+        println!("  cond_text: mean={ct_mean:.6} std={ct_std:.6} p1={:.6} p99={:.6}",
+            vals[n/100], vals[99*n/100]);
 
         // ── LocDiT: diffusion generate ──
         let feat_dim = config.feat_dim;
@@ -222,13 +235,34 @@ mod tests {
             feat_dim,
             sched,
         )?;
-        let cond_dit = project_cond_to_feat_dim(&cond_text, feat_dim)?;
-        assert_eq!(cond_dit.dims(), &[1, seq_len, feat_dim],
-            "cond_dit shape before LocDiT");
+        // Pass 1024-dim cond directly (DiT skips cond_proj when dim == hidden_dim)
+        let cond_dit = cond_text
+            .reshape((1, seq_len, 64, 16))?
+            .mean(3)?;
+        assert_eq!(cond_dit.dims(), &[1, seq_len, 64],
+            "cond_dit shape before LocDiT (mean-pooled to 64)");
+        // Debug cond_dit stats
+        let cd = cond_dit.to_vec3::<f32>()?;
+        let mut cd_vals: Vec<f32> = cd.iter().flat_map(|b| b.iter().flat_map(|t| t.iter())).copied().collect();
+        cd_vals.sort_by(|a,b| a.partial_cmp(b).unwrap());
+        let cn = cd_vals.len();
+        let cd_mean = cd_vals.iter().sum::<f32>() / cn as f32;
+        let cd_std = (cd_vals.iter().map(|v| (v - cd_mean).powi(2)).sum::<f32>() / cn as f32).sqrt();
+        println!("  cond_dit (mean-pooled 1024→64): mean={cd_mean:.6} std={cd_std:.6} p1={:.6} p99={:.6}",
+            cd_vals[cn/100], cd_vals[99*cn/100]);
         let latent = dit.generate(&cond_dit, 2, Some(42))?;
         assert_eq!(latent.dims(), &[1, feat_dim, seq_len],
             "LocDiT latent shape");
         println!("LocDiT generate OK: {:?}", latent.shape());
+        // Debug latent stats
+        let lt = latent.to_vec3::<f32>()?;
+        let mut lt_vals: Vec<f32> = lt.iter().flat_map(|b| b.iter().flat_map(|t| t.iter())).copied().collect();
+        lt_vals.sort_by(|a,b| a.partial_cmp(b).unwrap());
+        let ln = lt_vals.len();
+        let lt_mean = lt_vals.iter().sum::<f32>() / ln as f32;
+        let lt_std = (lt_vals.iter().map(|v| (v - lt_mean).powi(2)).sum::<f32>() / ln as f32).sqrt();
+        println!("  latent: mean={lt_mean:.6} std={lt_std:.6} p1={:.6} p99={:.6} peak={:.6}",
+            lt_vals[ln/100], lt_vals[99*ln/100], lt_vals[ln-1]);
 
         // ── AudioVAE decode ──
         let vae = AudioVAE::load(&audiovae_tensors, &config.audio_vae_config)?;
@@ -243,28 +277,16 @@ mod tests {
         vae.check_audio(&waveform)?;
         println!("AudioVAE sanity check PASSED");
 
+        // Check peak value
+        let peak_v = waveform.to_dtype(candle_core::DType::F32)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        println!("AudioVAE peak: {peak_v:.6}");
+        if peak_v < 1e-4 {
+            println!("WARNING: very quiet output (peak={peak_v:.6}), may need gain");
+        }
+
         println!("\n✓ Full pipeline shape verification PASSED");
         Ok(())
     }
 }
 
-/// Temporary projection from 1024-dim text cond to 64-dim feat_dim cond.
-///
-/// The real VoxCPM2 pipeline likely uses feat_encoder or a learned projection
-/// to reduce dimensionality. For now we apply mean pooling across heads.
-fn project_cond_to_feat_dim(cond: &Tensor, feat_dim: usize) -> anyhow::Result<Tensor> {
-    let (b, t, _hidden) = cond.shape().dims3()?;
-    // Simple learned projection via matmul (we don't have a dedicated weight,
-    // so create a random fixed projection as placeholder)
-    // Averages over hidden/feat_dim groups
-    let group_size = _hidden / feat_dim;
-    if _hidden % feat_dim == 0 {
-        // Mean pool: reshape [b, t, hidden] → [b, t, feat_dim, group] → mean along last dim
-        let reshaped = cond.reshape((b, t, feat_dim, group_size))?;
-        let pooled = reshaped.mean(3)?;
-        Ok(pooled)
-    } else {
-        // Fallback: slice to feat_dim
-        Ok(cond.narrow(2, 0, feat_dim)?)
-    }
-}
+
