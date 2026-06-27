@@ -39,3 +39,4 @@ safetensors = "0.7"
 
 eframe = { version = "0.30", default-features = true }
 egui = "0.30"
+rodio = "0.20"

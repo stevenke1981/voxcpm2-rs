@@ -20,5 +20,7 @@ anyhow.workspace = true
 crossbeam-channel.workspace = true
 eframe.workspace = true
 egui.workspace = true
+hound.workspace = true
 rfd.workspace = true
+rodio.workspace = true
 voxcpm2-core = { path = "../voxcpm2-core", default-features = false }

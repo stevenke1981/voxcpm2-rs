@@ -83,6 +83,22 @@ pub fn load_text_to_dit_projections(
     Ok((lm_to_dit, res_to_dit))
 }
 
+/// Load audiovae decoder tensors as a raw HashMap for manual access.
+///
+/// This bypasses VarBuilder to handle 3D alpha tensors ([1, C, 1])
+/// and ConvTranspose1d weights that VarBuilder cannot represent.
+pub fn load_audiovae_decoder_tensors(
+    model_dir: &Path,
+    device: &Device,
+) -> Result<HashMap<String, Tensor>> {
+    let path = model_dir.join("audiovae.safetensors");
+    let mut tensors = candle_core::safetensors::load(path, device)?;
+    fuse_weight_norm(&mut tensors)?;
+    // Keep only decoder.* tensors
+    tensors.retain(|k, _| k.starts_with("decoder."));
+    Ok(tensors)
+}
+
 /// Quick sanity: load model.safetensors and report tensor count.
 pub fn inspect_main_weights(model_dir: &Path, device: &Device) -> Result<usize> {
     let tensors = candle_core::safetensors::load(model_dir.join("model.safetensors"), device)?;

@@ -1,5 +1,6 @@
 pub mod attention;
 pub mod audio_vae;
+pub mod feat_encoder;
 pub mod loc_dit;
 pub mod loc_enc;
 pub mod mlp;
@@ -10,6 +11,7 @@ pub mod tslm;
 
 pub use attention::GQAAttention;
 pub use audio_vae::*;
+pub use feat_encoder::*;
 pub use loc_dit::*;
 pub use loc_enc::*;
 pub use mlp::MLP;

@@ -93,7 +93,7 @@ impl VoxPipeline {
 
         // ── Load all weights ──
         let main_vb = weights::load_main_vb(model_dir, dev)?;
-        let audiovae_vb = weights::load_audiovae_vb(model_dir, dev)?;
+        let audiovae_tensors = weights::load_audiovae_decoder_tensors(model_dir, dev)?;
 
         // ── Tokenizer ──
         let tokenizer = crate::tokenizer::VoxTokenizer::from_model_dir(model_dir)?;
@@ -138,7 +138,7 @@ impl VoxPipeline {
         // latent shape: [1, feat_dim, seq_len]
 
         // ── AudioVAE decode ──
-        let vae = crate::models::AudioVAE::load(&audiovae_vb, &config.audio_vae_config)?;
+        let vae = crate::models::AudioVAE::load(&audiovae_tensors, &config.audio_vae_config)?;
         let waveform = vae.decode(&latent)?;
         // waveform shape: [1, 1, samples]
 
