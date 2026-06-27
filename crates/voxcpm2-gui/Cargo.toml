@@ -1,0 +1,24 @@
+[package]
+name = "voxcpm2-gui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "voxcpm2-gui"
+path = "src/main.rs"
+
+[features]
+default = ["cpu"]
+cpu = ["voxcpm2-core/cpu"]
+cuda = ["voxcpm2-core/cuda"]
+metal = ["voxcpm2-core/metal"]
+mkl = ["voxcpm2-core/mkl"]
+
+[dependencies]
+anyhow.workspace = true
+crossbeam-channel.workspace = true
+eframe.workspace = true
+egui.workspace = true
+rfd.workspace = true
+voxcpm2-core = { path = "../voxcpm2-core", default-features = false }

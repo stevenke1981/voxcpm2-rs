@@ -1,0 +1,13 @@
+model_dir = "models/VoxCPM2"
+device = "auto"
+default_cfg = 2.0
+default_steps = 10
+output_dir = "output"
+label_ai_generated = true
+
+[gui]
+remember_last_model_dir = true
+show_advanced = true
+
+[safety]
+require_voice_clone_consent = true

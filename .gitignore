@@ -1,0 +1,8 @@
+/target
+/output
+/models
+*.wav
+*.safetensors
+*.pth
+*.manifest.json
+.DS_Store

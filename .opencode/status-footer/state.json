@@ -1,0 +1,1056 @@
+{
+  "version": 1,
+  "updatedAt": 1782539969088,
+  "sessions": {
+    "ses_0f88023bfffeuN8huYjXRzg9Jt": {
+      "startedAt": 1782537247808,
+      "lastActivityAt": 1782539969021,
+      "lastSeenAt": 1782539969021,
+      "activeMs": 2488496,
+      "messages": {
+        "msg_f07991d2b001nowDFWwsJgcMZz": {
+          "input": 47,
+          "output": 301,
+          "reasoning": 203,
+          "cacheRead": 88064,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538908369
+        },
+        "msg_f079932dd001JlKN3mW5079Ubg": {
+          "input": 54,
+          "output": 159,
+          "reasoning": 34,
+          "cacheRead": 88576,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538912106
+        },
+        "msg_f0799417a001itkX6pmjaPwHdD": {
+          "input": 134,
+          "output": 152,
+          "reasoning": 11,
+          "cacheRead": 88704,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538915384
+        },
+        "msg_f07994e44001L2riSZhpWIUSZk": {
+          "input": 56,
+          "output": 161,
+          "reasoning": 13,
+          "cacheRead": 88960,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538918577
+        },
+        "msg_f07995abc001JPkp2lc2VSxjwO": {
+          "input": 117,
+          "output": 191,
+          "reasoning": 11,
+          "cacheRead": 89088,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538921690
+        },
+        "msg_f079966e6001beBbdvMxusakDY": {
+          "input": 78,
+          "output": 156,
+          "reasoning": 11,
+          "cacheRead": 89344,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538924775
+        },
+        "msg_f079972f5001tWccZi8OP1KtDb": {
+          "input": 132,
+          "output": 153,
+          "reasoning": 203,
+          "cacheRead": 89472,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538929878
+        },
+        "msg_f079986e1001CWvQqWfJqVqnjt": {
+          "input": 119,
+          "output": 152,
+          "reasoning": 11,
+          "cacheRead": 89856,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538933086
+        },
+        "msg_f0799936a001j2xjBGUzeS8Jgk": {
+          "input": 41,
+          "output": 142,
+          "reasoning": 11,
+          "cacheRead": 90112,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538935830
+        },
+        "msg_f07999e21001y5mVHo7wT1IvJd": {
+          "input": 81,
+          "output": 153,
+          "reasoning": 20,
+          "cacheRead": 90240,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538939101
+        },
+        "msg_f0799aae70011jUD2idbdVFS0b": {
+          "input": 141,
+          "output": 141,
+          "reasoning": 199,
+          "cacheRead": 90368,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538943802
+        },
+        "msg_f0799bd47001OEXBCOkA5aJAbz": {
+          "input": 112,
+          "output": 386,
+          "reasoning": 800,
+          "cacheRead": 90752,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538957938
+        },
+        "msg_f0799f480001YjNgH1dIKrF2Tx": {
+          "input": 507,
+          "output": 83,
+          "reasoning": 5,
+          "cacheRead": 92032,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538962342
+        },
+        "msg_f079a05b3001QNjEy9B753quVE": {
+          "input": 5375,
+          "output": 142,
+          "reasoning": 324,
+          "cacheRead": 92544,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538968012
+        },
+        "msg_f079a1bd80014oPraVPLWfPr2y": {
+          "input": 96,
+          "output": 1855,
+          "reasoning": 14,
+          "cacheRead": 98304,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538981230
+        },
+        "msg_f079a4f7b001n8SfZn9ruWSsFn": {
+          "input": 60,
+          "output": 978,
+          "reasoning": 14,
+          "cacheRead": 100224,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538989156
+        },
+        "msg_f079a6e71001OOX12iUMunBI15": {
+          "input": 43,
+          "output": 250,
+          "reasoning": 24,
+          "cacheRead": 101248,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538993141
+        },
+        "msg_f079a7e000011jT2jMTa2hmU98": {
+          "input": 76,
+          "output": 357,
+          "reasoning": 53,
+          "cacheRead": 101504,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782538998744
+        },
+        "msg_f079a93e5001SnxSrpqk43EIZO": {
+          "input": 117,
+          "output": 83,
+          "reasoning": 6,
+          "cacheRead": 101888,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539003507
+        },
+        "msg_f079aa680001Mj83Tz47ljuym9": {
+          "input": 6079,
+          "output": 132,
+          "reasoning": 482,
+          "cacheRead": 102016,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539011748
+        },
+        "msg_f079ac6b3001LoA6xM50tntxa9": {
+          "input": 137,
+          "output": 129,
+          "reasoning": 21,
+          "cacheRead": 108672,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539015777
+        },
+        "msg_f079ad66c001ldKb3l5uzgbdA5": {
+          "input": 699,
+          "output": 352,
+          "reasoning": 72,
+          "cacheRead": 108928,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539020594
+        },
+        "msg_f079ae93e001Ibc382RHdqSyCz": {
+          "input": 114,
+          "output": 139,
+          "reasoning": 64,
+          "cacheRead": 109952,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539025004
+        },
+        "msg_f079afa79001Tfz4jvED1E9GRK": {
+          "input": 75,
+          "output": 203,
+          "reasoning": 10,
+          "cacheRead": 110208,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539029170
+        },
+        "msg_f079b0ac0001FUPrl3FqtTORPv": {
+          "input": 1243,
+          "output": 100,
+          "reasoning": 68,
+          "cacheRead": 110464,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539040061
+        },
+        "msg_f079b354f0010SUlT8390Xnxrp": {
+          "input": 2475,
+          "output": 157,
+          "reasoning": 280,
+          "cacheRead": 111872,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539045745
+        },
+        "msg_f079b4b7f001um9Y36x53loRl9": {
+          "input": 111,
+          "output": 147,
+          "reasoning": 525,
+          "cacheRead": 114688,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539054506
+        },
+        "msg_f079b6db9001JkMf1Y0HX65yx1": {
+          "input": 30,
+          "output": 153,
+          "reasoning": 854,
+          "cacheRead": 115456,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539067480
+        },
+        "msg_f079ba069001jb32rfjVcG60Ie": {
+          "input": 28,
+          "output": 158,
+          "reasoning": 259,
+          "cacheRead": 116480,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539073404
+        },
+        "msg_f079bb78b001IwvuCepweDXS1b": {
+          "input": 76,
+          "output": 155,
+          "reasoning": 18,
+          "cacheRead": 116864,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539076846
+        },
+        "msg_f079bc4fe001Cl6ikRP7bnr558": {
+          "input": 136,
+          "output": 122,
+          "reasoning": 21,
+          "cacheRead": 116992,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539080809
+        },
+        "msg_f079bd475001WU1g3tHldxB44K": {
+          "input": 1098,
+          "output": 494,
+          "reasoning": 76,
+          "cacheRead": 117248,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539086770
+        },
+        "msg_f079bebc10015UA4AWgU8GzNWB": {
+          "input": 19,
+          "output": 391,
+          "reasoning": 15,
+          "cacheRead": 118912,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539091801
+        },
+        "msg_f079bff66001yEqddApBm76JYO": {
+          "input": 56,
+          "output": 140,
+          "reasoning": 8,
+          "cacheRead": 119296,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539095269
+        },
+        "msg_f079c0cf30016BFAlytbKLmCsC": {
+          "input": 91,
+          "output": 214,
+          "reasoning": 11,
+          "cacheRead": 119424,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539099174
+        },
+        "msg_f079c1c33001EcS07N0bUG74J2": {
+          "input": 75,
+          "output": 205,
+          "reasoning": 22,
+          "cacheRead": 119680,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539103014
+        },
+        "msg_f079c2b34001qSUCWxm0N5cmgL": {
+          "input": 61,
+          "output": 162,
+          "reasoning": 9,
+          "cacheRead": 119936,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539106367
+        },
+        "msg_f079c3851001L22z8RNHT5kHjG": {
+          "input": 119,
+          "output": 157,
+          "reasoning": 9,
+          "cacheRead": 120064,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539109790
+        },
+        "msg_f079c45ae001NF4L0ir1JCQwPp": {
+          "input": 44,
+          "output": 145,
+          "reasoning": 55,
+          "cacheRead": 120320,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539114287
+        },
+        "msg_f079c573c001HiOvjLRtbP6mCV": {
+          "input": 131,
+          "output": 83,
+          "reasoning": 8,
+          "cacheRead": 120448,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539121825
+        },
+        "msg_f079c74b1001qzUoYcmBfDemh8": {
+          "input": 659,
+          "output": 163,
+          "reasoning": 41,
+          "cacheRead": 120576,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539125903
+        },
+        "msg_f079c84a0001P3qURBKClV7mw1": {
+          "input": 110,
+          "output": 146,
+          "reasoning": 7,
+          "cacheRead": 121344,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539130106
+        },
+        "msg_f079c9508001bzwlmlYjB4pZL8": {
+          "input": 22,
+          "output": 83,
+          "reasoning": 8,
+          "cacheRead": 121600,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539137885
+        },
+        "msg_f079cb36d001FyOxq457i8ayK0": {
+          "input": 317,
+          "output": 105,
+          "reasoning": 69,
+          "cacheRead": 121600,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539142480
+        },
+        "msg_f079cc561001Ns3pSOeQflqoRT": {
+          "input": 19232,
+          "output": 96,
+          "reasoning": 23,
+          "cacheRead": 121984,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539147368
+        },
+        "msg_f079cd877001ulfUuwRfD4Vu4H": {
+          "input": 37,
+          "output": 85,
+          "reasoning": 19,
+          "cacheRead": 141312,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539150816
+        },
+        "msg_f079ce5f3001u2KFr32Nc9qsFZ": {
+          "input": 27,
+          "output": 83,
+          "reasoning": 18,
+          "cacheRead": 141440,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539159417
+        },
+        "msg_f079d0787001KyS34NMpj2SzsQ": {
+          "input": 204,
+          "output": 90,
+          "reasoning": 35,
+          "cacheRead": 141568,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539164701
+        },
+        "msg_f079d1c2c001uqm265XntTh2uP": {
+          "input": 10377,
+          "output": 148,
+          "reasoning": 363,
+          "cacheRead": 141824,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539172346
+        },
+        "msg_f079d3a080010iWISti2wsIgtS": {
+          "input": 15009,
+          "output": 1332,
+          "reasoning": 792,
+          "cacheRead": 152704,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539407643
+        },
+        "msg_f07a0d163001oACIj1i08bzBJ2": {
+          "input": 58825,
+          "output": 1419,
+          "reasoning": 682,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539429316
+        },
+        "msg_f07a125e6001J56yrvzrXHdqCp": {
+          "input": 5073,
+          "output": 170,
+          "reasoning": 278,
+          "cacheRead": 27008,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539438627
+        },
+        "msg_f07a14a32001df1Qmid25WDYB2": {
+          "input": 4388,
+          "output": 236,
+          "reasoning": 874,
+          "cacheRead": 32512,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539451919
+        },
+        "msg_f07a17e1f001OjdKEY4tIW5AJM": {
+          "input": 1158,
+          "output": 199,
+          "reasoning": 245,
+          "cacheRead": 37888,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539456920
+        },
+        "msg_f07a191a8001Ln4rEPsP0uf7UR": {
+          "input": 1178,
+          "output": 1130,
+          "reasoning": 789,
+          "cacheRead": 39424,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539473180
+        },
+        "msg_f07a1d12c001sAXJtBfzfU6nQb": {
+          "input": 51,
+          "output": 123,
+          "reasoning": 130,
+          "cacheRead": 42496,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539477146
+        },
+        "msg_f07a1e0a8001JxfCGN7pdlYdl3": {
+          "input": 378,
+          "output": 71,
+          "reasoning": 385,
+          "cacheRead": 42752,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539482798
+        },
+        "msg_f07a1f6bc001sm101i4q6PNJbK": {
+          "input": 124,
+          "output": 246,
+          "reasoning": 88,
+          "cacheRead": 43520,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539486592
+        },
+        "msg_f07a2058f001mRWQiQgdgRmFPd": {
+          "input": 89,
+          "output": 84,
+          "reasoning": 19,
+          "cacheRead": 43904,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539493905
+        },
+        "msg_f07a2221f0017SrIyNcJZS7o05": {
+          "input": 268,
+          "output": 94,
+          "reasoning": 29,
+          "cacheRead": 44032,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539501480
+        },
+        "msg_f07a23fb70016OKExht1kUEUPa": {
+          "input": 2431,
+          "output": 137,
+          "reasoning": 506,
+          "cacheRead": 44416,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539508224
+        },
+        "msg_f07a25a0f001kNpEeZgsSYLwXa": {
+          "input": 1048,
+          "output": 107,
+          "reasoning": 473,
+          "cacheRead": 47488,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539514382
+        },
+        "msg_f07a2721d001BwqEXTMoDp06Sa": {
+          "input": 913,
+          "output": 347,
+          "reasoning": 769,
+          "cacheRead": 49024,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539527030
+        },
+        "msg_f07a2a388001zPhGZLJHX20Nmy": {
+          "input": 573,
+          "output": 271,
+          "reasoning": 23,
+          "cacheRead": 50944,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539533453
+        },
+        "msg_f07a2bc9d001hhNSSnevEy6qY4": {
+          "input": 120,
+          "output": 190,
+          "reasoning": 98,
+          "cacheRead": 51712,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539539994
+        },
+        "msg_f07a2d62a001CCg0yBm65rgkZM": {
+          "input": 38,
+          "output": 238,
+          "reasoning": 19,
+          "cacheRead": 52096,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539546239
+        },
+        "msg_f07a2ee8f001qaNxNMpAlr4E7A": {
+          "input": 59,
+          "output": 278,
+          "reasoning": 28,
+          "cacheRead": 52352,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539552729
+        },
+        "msg_f07a307e9001YatpMkV279rYGu": {
+          "input": 756,
+          "output": 205,
+          "reasoning": 352,
+          "cacheRead": 52608,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539561631
+        },
+        "msg_f07a32aaf001AwpWTtYKsmFm8E": {
+          "input": 1195,
+          "output": 244,
+          "reasoning": 211,
+          "cacheRead": 53888,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539569308
+        },
+        "msg_f07a348ab00104VEsziKl7m7QE": {
+          "input": 3976,
+          "output": 449,
+          "reasoning": 6248,
+          "cacheRead": 55424,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539623572
+        },
+        "msg_f07a41ca3001h0JGV0dPtZOWZ6": {
+          "input": 64,
+          "output": 215,
+          "reasoning": 32,
+          "cacheRead": 66048,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539626830
+        },
+        "msg_f07a42960001pEq00kCqtC5GBU": {
+          "input": 70,
+          "output": 107,
+          "reasoning": 492,
+          "cacheRead": 66304,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539632655
+        },
+        "msg_f07a440210016GwtmrD3uzoxSK": {
+          "input": 1171,
+          "output": 89,
+          "reasoning": 269,
+          "cacheRead": 66944,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539637452
+        },
+        "msg_f07a452dd001SWcrRPS6I64dL9": {
+          "input": 989,
+          "output": 92,
+          "reasoning": 875,
+          "cacheRead": 68352,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539678294
+        },
+        "msg_f07a4f26f001ti25c5kVmmw9Ob": {
+          "input": 2731,
+          "output": 163,
+          "reasoning": 1812,
+          "cacheRead": 70272,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539695856
+        },
+        "msg_f07a53703001JH2k1SGcMK4yyJ": {
+          "input": 473,
+          "output": 155,
+          "reasoning": 44,
+          "cacheRead": 74880,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539700201
+        },
+        "msg_f07a54806001oFTNqZf0ZzMGAJ": {
+          "input": 204,
+          "output": 127,
+          "reasoning": 17,
+          "cacheRead": 75520,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539709140
+        },
+        "msg_f07a56aec001KvTg1ak4Es8mI5": {
+          "input": 2636,
+          "output": 153,
+          "reasoning": 39,
+          "cacheRead": 75776,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539712742
+        },
+        "msg_f07a578fa001XyEZyVCg9gk5bj": {
+          "input": 27,
+          "output": 88,
+          "reasoning": 9,
+          "cacheRead": 78592,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539725155
+        },
+        "msg_f07a5a975001ziZ506aWFAPiPl": {
+          "input": 2819,
+          "output": 107,
+          "reasoning": 1329,
+          "cacheRead": 78592,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539737685
+        },
+        "msg_f07a5da67001TpHlMjLgTyAWYI": {
+          "input": 824,
+          "output": 958,
+          "reasoning": 768,
+          "cacheRead": 82816,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539751163
+        },
+        "msg_f07a60f0e00154uPpeTdH4AQz2": {
+          "input": 133,
+          "output": 88,
+          "reasoning": 247,
+          "cacheRead": 85248,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539764857
+        },
+        "msg_f07a6448c001quIiLiLvEaYtKx": {
+          "input": 1154,
+          "output": 175,
+          "reasoning": 50,
+          "cacheRead": 85632,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539804917
+        },
+        "msg_f07a6e10a001Y37p2Rgvzxsh1w": {
+          "input": 2865,
+          "output": 1480,
+          "reasoning": 165,
+          "cacheRead": 86912,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539816117
+        },
+        "msg_f07a70ccb001Qo5bCbMypXoZ4s": {
+          "input": 133,
+          "output": 87,
+          "reasoning": 102,
+          "cacheRead": 91392,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539826703
+        },
+        "msg_f07a73623001lmhpUNUk3VRUwT": {
+          "input": 267,
+          "output": 123,
+          "reasoning": 19,
+          "cacheRead": 91648,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539841523
+        },
+        "msg_f07a77006001q88dIxWPvFGXzU": {
+          "input": 1130,
+          "output": 68,
+          "reasoning": 57,
+          "cacheRead": 92032,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539844684
+        },
+        "msg_f07a77c5f001CRhCIEOYz74pYJ": {
+          "input": 1361,
+          "output": 793,
+          "reasoning": 216,
+          "cacheRead": 93184,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539854142
+        },
+        "msg_f07a7a154001P1vTaL8usrpqN2": {
+          "input": 81,
+          "output": 905,
+          "reasoning": 149,
+          "cacheRead": 95488,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539865736
+        },
+        "msg_f07a8bf5f001ybluYd4CIxB0nS": {
+          "input": 214,
+          "output": 72,
+          "reasoning": 1410,
+          "cacheRead": 96512,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539945236
+        },
+        "msg_f07a9052a001WKkroVx33O1teQ": {
+          "input": 66,
+          "output": 103,
+          "reasoning": 18,
+          "cacheRead": 98176,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539948746
+        },
+        "msg_f07a912dd001pWtT93ugg0hzjY": {
+          "input": 191,
+          "output": 59,
+          "reasoning": 13,
+          "cacheRead": 98304,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539951739
+        },
+        "msg_f07a91e8d001f6ESaj0AqwkJOG": {
+          "input": 110,
+          "output": 162,
+          "reasoning": 27,
+          "cacheRead": 98560,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539955847
+        },
+        "msg_f07a92e9c0013GhbtA9k77iQvc": {
+          "input": 438,
+          "output": 61,
+          "reasoning": 34,
+          "cacheRead": 98560,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539958882
+        },
+        "msg_f07a93a76001otNPHY1sdgqIsu": {
+          "input": 338,
+          "output": 145,
+          "reasoning": 39,
+          "cacheRead": 99072,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539962487
+        },
+        "msg_f07a9488a001ati2SLP4hiaAHU": {
+          "input": 526,
+          "output": 64,
+          "reasoning": 74,
+          "cacheRead": 99584,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539966110
+        },
+        "msg_f07a956b3001w4fhO0QCLhWSGQ": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539969087
+        }
+      },
+      "todos": {
+        "completed": 0,
+        "total": 4
+      }
+    },
+    "ses_0f8626caaffeiQlyjg5yqDkw2j": {
+      "startedAt": 1782539195229,
+      "lastActivityAt": 1782539407654,
+      "lastSeenAt": 1782539407654,
+      "activeMs": 212425,
+      "messages": {
+        "msg_f079d936b001QJKqPj3dScnKC2": {
+          "input": 25873,
+          "output": 376,
+          "reasoning": 31,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539199788
+        },
+        "msg_f079da512001pesdXNHms15GMZ": {
+          "input": 16832,
+          "output": 90,
+          "reasoning": 2345,
+          "cacheRead": 26240,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539228227
+        },
+        "msg_f079e1425001Aw6IEY9MA1FPDf": {
+          "input": 1463,
+          "output": 610,
+          "reasoning": 2243,
+          "cacheRead": 45440,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539250456
+        },
+        "msg_f079e6aff001FiUOGMyuudKH0r": {
+          "input": 107,
+          "output": 560,
+          "reasoning": 64,
+          "cacheRead": 49664,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539256291
+        },
+        "msg_f079e81d1001XxnyN468gjYTQ4": {
+          "input": 106,
+          "output": 177,
+          "reasoning": 108,
+          "cacheRead": 50304,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539260055
+        },
+        "msg_f079e907d001ABAMmnqV7Vf1h9": {
+          "input": 22,
+          "output": 609,
+          "reasoning": 16,
+          "cacheRead": 50688,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539265368
+        },
+        "msg_f079ea542001DR6cni32aeCKYF": {
+          "input": 22,
+          "output": 842,
+          "reasoning": 242,
+          "cacheRead": 51328,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539274290
+        },
+        "msg_f079ec817001o6b4f4vDQGKInq": {
+          "input": 97,
+          "output": 657,
+          "reasoning": 6,
+          "cacheRead": 52352,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539279254
+        },
+        "msg_f079edb87001dC37pAQgIWTLC8": {
+          "input": 135,
+          "output": 703,
+          "reasoning": 65,
+          "cacheRead": 52992,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539285325
+        },
+        "msg_f079ef336001QpdzP2kxmw2U53": {
+          "input": 22,
+          "output": 87,
+          "reasoning": 1225,
+          "cacheRead": 53888,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539357608
+        },
+        "msg_f07a00d8d001vxINvPwKzFrtmO": {
+          "input": 258,
+          "output": 88,
+          "reasoning": 17,
+          "cacheRead": 55168,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539365757
+        },
+        "msg_f07a02d67001z5YOO8A2lpJPjW": {
+          "input": 4784,
+          "output": 140,
+          "reasoning": 1291,
+          "cacheRead": 55424,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539381475
+        },
+        "msg_f07a06ac7001hE9xtZlT5Obhj4": {
+          "input": 367,
+          "output": 208,
+          "reasoning": 137,
+          "cacheRead": 61568,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539385499
+        },
+        "msg_f07a07a7b001F0lcS3PGSEFR8u": {
+          "input": 87,
+          "output": 107,
+          "reasoning": 36,
+          "cacheRead": 62208,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539388122
+        },
+        "msg_f07a084c20018cDzlPkjgNoH0E": {
+          "input": 386,
+          "output": 166,
+          "reasoning": 46,
+          "cacheRead": 62336,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539391288
+        },
+        "msg_f07a09123001Fo19wds25GnEk6": {
+          "input": 101,
+          "output": 86,
+          "reasoning": 16,
+          "cacheRead": 62848,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539398021
+        },
+        "msg_f07a0ab6f0010uGk8VlOS5lPyc": {
+          "input": 4432,
+          "output": 744,
+          "reasoning": 229,
+          "cacheRead": 62976,
+          "cacheWrite": 0,
+          "cost": 0,
+          "updatedAt": 1782539407653
+        }
+      },
+      "todos": {
+        "completed": 0,
+        "total": 0
+      }
+    }
+  }
+}

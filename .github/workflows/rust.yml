@@ -1,0 +1,15 @@
+name: rust-smoke
+on:
+  push:
+  pull_request:
+
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --features cpu -- -D warnings
+      - run: cargo test --workspace --features cpu
+      - run: cargo run -p voxcpm2-cli --features cpu -- synth --text "ci smoke" --out output/ci.wav --dry-run

@@ -1,0 +1,41 @@
+[workspace]
+members = [
+  "crates/voxcpm2-core",
+  "crates/voxcpm2-cli",
+  "crates/voxcpm2-gui",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Steven <stevenke1981@gmail.com>"]
+repository = "https://huggingface.co/openbmb/VoxCPM2"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+hound = "3.5"
+tokenizers = "0.20"
+sha2 = "0.10"
+hex = "0.4"
+walkdir = "2"
+crossbeam-channel = "0.5"
+rand = "0.9"
+rfd = "0.15"
+
+# Candle 版本請依實際環境調整；若 crates.io 已有新版，先小步升級並跑 harness。
+candle-core = { version = "0.9", default-features = false }
+candle-nn = { version = "0.9", default-features = false }
+candle-transformers = { version = "0.9", default-features = false }
+
+safetensors = "0.7"
+
+eframe = { version = "0.30", default-features = true }
+egui = "0.30"
