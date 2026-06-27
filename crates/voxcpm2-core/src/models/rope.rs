@@ -79,6 +79,10 @@ impl RoPE {
         let half = x.dim(3)? / 2;
         let x1 = x.narrow(3, 0, half)?;
         let x2 = x.narrow(3, half, half)?;
+        // Cast cos/sin to x's dtype (x may be BF16, cos/sin are F32)
+        let x_dtype = x.dtype();
+        let cos = cos.to_dtype(x_dtype)?;
+        let sin = sin.to_dtype(x_dtype)?;
         // 旋轉: [x1 * cos - x2 * sin, x1 * sin + x2 * cos]
         // cos/sin shape: [seq_len, half] → broadcast to [1, seq_len, 1, half]
         let cos_b = cos.unsqueeze(0)?.unsqueeze(2)?;

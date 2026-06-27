@@ -26,7 +26,7 @@ impl RalmLayer {
         max_seq_len: usize,
         dev: &Device,
     ) -> Result<Self> {
-        let prefix = format!("residual_lm.layers.{i}");
+        let prefix = format!("layers.{i}");
         let pp = vb.pp(&prefix);
         let eps = cfg.rms_norm_eps;
 
@@ -125,10 +125,14 @@ pub struct RALM {
 }
 
 impl RALM {
-    pub fn load(vb: &VarBuilder, cfg: &LmConfig, dev: &Device, use_kv_cache: bool) -> Result<Self> {
-        let norm = RMSNorm::load(vb, cfg.hidden_size, cfg.rms_norm_eps, "residual_lm.norm")?;
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
-        for i in 0..cfg.num_hidden_layers {
+    /// `num_layers` = `config.residual_lm_num_layers` (from VoxConfig, typically 8).
+    pub fn load(
+        vb: &VarBuilder, cfg: &LmConfig, num_layers: usize,
+        dev: &Device, use_kv_cache: bool,
+    ) -> Result<Self> {
+        let norm = RMSNorm::load(vb, cfg.hidden_size, cfg.rms_norm_eps, "norm")?;
+        let mut layers = Vec::with_capacity(num_layers);
+        for i in 0..num_layers {
             layers.push(RalmLayer::load(
                 vb,
                 i,

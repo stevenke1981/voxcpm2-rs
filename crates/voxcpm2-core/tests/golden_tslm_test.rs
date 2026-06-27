@@ -4,21 +4,11 @@
 //!   1. python scripts/golden_tslm.py
 //!   2. cargo test --test golden_tslm_test -- --nocapture
 
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use candle_nn::{Linear, Module};
 use std::collections::HashMap;
 use std::path::Path;
-
-/// Correct RMSNorm: normalizes over the LAST dimension.
-fn rms_norm(x: &Tensor, weight: &Tensor, eps: f64) -> candle_core::Result<Tensor> {
-    let x_f32 = x.to_dtype(DType::F32)?;
-    let ndim = x.shape().dims().len();
-    let last_dim = ndim - 1;
-    let norm_variance = x_f32.sqr()?.mean_keepdim(last_dim)?;
-    let inv_norm = (norm_variance + eps)?.sqrt()?.recip()?;
-    let y = x_f32.broadcast_mul(&inv_norm)?;
-    y.broadcast_mul(weight)
-}
+use voxcpm2_core::models::RMSNorm;
 
 /// Apply RoPE with external cos/sin tables (from golden reference).
 fn apply_rope_cos_sin(
@@ -92,9 +82,12 @@ fn tslm_layer0_forward(
 ) -> candle_core::Result<HashMap<String, Tensor>> {
     let mut out = HashMap::new();
 
-    // ── RMSNorm w/ golden weights ──
-    let ln_w = load_golden(golden, "base_lm.layers.0.input_layernorm.weight", &[2048]);
-    let h = rms_norm(x, &ln_w, eps)?;
+    // ── RMSNorm w/ golden weights (using fixed crate RMSNorm) ──
+    let input_norm = RMSNorm::new(
+        load_golden(golden, "base_lm.layers.0.input_layernorm.weight", &[2048]),
+        eps,
+    )?;
+    let h = input_norm.forward(x)?;
     out.insert("after_input_layernorm".into(), h.clone());
 
     // ── QKV projections ──
@@ -157,9 +150,12 @@ fn tslm_layer0_forward(
     let h = (x + &attn_out)?;
     out.insert("after_attention_residual".into(), h.clone());
 
-    // ── Post-attention RMSNorm ──
-    let post_ln_w = load_golden(golden, "base_lm.layers.0.post_attention_layernorm.weight", &[2048]);
-    let h_norm = rms_norm(&h, &post_ln_w, eps)?;
+    // ── Post-attention RMSNorm (using fixed crate RMSNorm) ──
+    let post_norm = RMSNorm::new(
+        load_golden(golden, "base_lm.layers.0.post_attention_layernorm.weight", &[2048]),
+        eps,
+    )?;
+    let h_norm = post_norm.forward(&h)?;
     out.insert("after_post_layernorm".into(), h_norm.clone());
 
     // ── SwiGLU MLP ──

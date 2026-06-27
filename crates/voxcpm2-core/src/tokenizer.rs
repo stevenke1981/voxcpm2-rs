@@ -15,8 +15,8 @@ pub struct SpecialTokens {
     pub im_end: u32,
     pub audio_start: u32,
     pub audio_end: u32,
-    pub audio_prompt_start: u32,
-    pub audio_prompt_end: u32,
+    pub audio_prompt_start: Option<u32>,
+    pub audio_prompt_end: Option<u32>,
 }
 
 impl SpecialTokens {
@@ -56,8 +56,8 @@ impl SpecialTokens {
             im_end: resolve_custom("<|im_end|>")?,
             audio_start: resolve_custom("<|audio_start|>")?,
             audio_end: resolve_custom("<|audio_end|>")?,
-            audio_prompt_start: resolve_custom("<|audio_prompt_start|>")?,
-            audio_prompt_end: resolve_custom("<|audio_prompt_end|>")?,
+            audio_prompt_start: tokenizer.token_to_id("<|audio_prompt_start|>"),
+            audio_prompt_end: tokenizer.token_to_id("<|audio_prompt_end|>"),
         })
     }
 }
@@ -369,7 +369,10 @@ mod tests {
         assert_ne!(s.unk_token, s.bos_token, "UNK and BOS should differ");
         assert_ne!(s.bos_token, s.eos_token, "BOS and EOS should differ");
         assert_ne!(s.audio_start, s.audio_end);
-        assert_ne!(s.audio_prompt_start, s.audio_prompt_end);
+        // audio_prompt tokens may be missing (not in all model vocabularies)
+        if let (Some(a), Some(b)) = (s.audio_prompt_start, s.audio_prompt_end) {
+            assert_ne!(a, b);
+        }
     }
 
     /// ── Parity test: compare Rust tokenizer output with Python golden ──

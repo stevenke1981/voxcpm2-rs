@@ -18,16 +18,18 @@ pub struct DiTBlock {
 
 impl DiTBlock {
     pub fn load(vb: &VarBuilder, i: usize, cfg: &DitConfig, dev: &Device) -> Result<Self> {
-        // DiT 權重儲存在 feat_decoder.estimator.decoder.layers.* 中
-        // 與 LocEnc decoder 共享，所以這裡只是個包裝
-        let pp = vb.pp(format!("feat_decoder.estimator.decoder.layers.{i}"));
+        // vb already has "feat_decoder." prefix (applied by caller)
+        // Tensor path: feat_decoder.estimator.decoder.layers.{i}.*
+        // DiT uses GQA with 8:1 ratio (num_heads=16, kv_heads=2), same as feat_encoder.
+        let kv_heads = cfg.num_heads / 8;
+        let pp = vb.pp(format!("estimator.decoder.layers.{i}"));
         let eps = 1e-5;
         let norm1 = RMSNorm::load(&pp, cfg.hidden_dim, eps, "input_layernorm")?;
         let attn = GQAAttention::load(
             &pp,
             cfg.hidden_dim,
             cfg.num_heads,
-            cfg.num_heads,
+            kv_heads,
             cfg.kv_channels,
             "self_attn",
             false,
@@ -154,42 +156,42 @@ impl LocDiT {
             vb,
             cfg.hidden_dim,
             1e-5,
-            "feat_decoder.estimator.decoder.norm",
+            "estimator.decoder.norm",
         )?;
         let cond_proj = candle_nn::linear(
             feat_dim,
             cfg.hidden_dim,
-            vb.pp("feat_decoder.estimator.cond_proj"),
+            vb.pp("estimator.cond_proj"),
         )?;
         let in_proj = candle_nn::linear(
             feat_dim,
             cfg.hidden_dim,
-            vb.pp("feat_decoder.estimator.in_proj"),
+            vb.pp("estimator.in_proj"),
         )?;
         let out_proj = candle_nn::linear(
             cfg.hidden_dim,
             feat_dim,
-            vb.pp("feat_decoder.estimator.out_proj"),
+            vb.pp("estimator.out_proj"),
         )?;
         let time_mlp_1 = candle_nn::linear(
             cfg.hidden_dim,
             cfg.hidden_dim,
-            vb.pp("feat_decoder.estimator.time_mlp.linear_1"),
+            vb.pp("estimator.time_mlp.linear_1"),
         )?;
         let time_mlp_2 = candle_nn::linear(
             cfg.hidden_dim,
             cfg.hidden_dim,
-            vb.pp("feat_decoder.estimator.time_mlp.linear_2"),
+            vb.pp("estimator.time_mlp.linear_2"),
         )?;
         let delta_time_mlp_1 = candle_nn::linear(
             cfg.hidden_dim,
             cfg.hidden_dim,
-            vb.pp("feat_decoder.estimator.delta_time_mlp.linear_1"),
+            vb.pp("estimator.delta_time_mlp.linear_1"),
         )?;
         let delta_time_mlp_2 = candle_nn::linear(
             cfg.hidden_dim,
             cfg.hidden_dim,
-            vb.pp("feat_decoder.estimator.delta_time_mlp.linear_2"),
+            vb.pp("estimator.delta_time_mlp.linear_2"),
         )?;
         let rope = RoPE::new(8192, cfg.kv_channels, 10000.0, None, dev)?;
 
@@ -330,10 +332,11 @@ mod tests {
     #[test]
     fn locdit_shape_test() -> Result<()> {
         let dev = Device::Cpu;
+        // num_heads must be divisible by 8 (GQA ratio 8:1 for DiT)
         let cfg = DitConfig {
             hidden_dim: 256,
             ffn_dim: 1024,
-            num_heads: 4,
+            num_heads: 16,
             num_layers: 2,
             kv_channels: 64,
             mean_mode: false,

@@ -38,9 +38,10 @@
 - [x] 實作 MLP / activation。
 - [x] 實作 KV cache。
 - [x] Layer 0 golden test：所有 10 個中間張量 cosine similarity = 1.0（通過）。
-  - after_input_layernorm、q/k/v_proj_out、q/k_rope_out、attn_output 等。
-- [x] 發現 crate RMSNorm bug：`mean_keepdim(1)` 在 3D [B,T,D] 輸入時，會對序列維度 T 做歸一化，而非特徵維度 D（應使用 `mean_keepdim(-1)`）。
-- [ ] 修正 crate 的 RMSNorm forward（改為支援任意維度）。
+- [x] **RMSNorm bug 修正**：`mean_keepdim(1)` → `mean_keepdim(ndim-1)` 支援任意維度。
+- [x] **28 層 TSLM 初始化通過**：`voxcpm2 synth --text "Hi."` 成功輸出 WAV（3840 samples, 48kHz）。
+- [ ] 改善 DiT conditioning：從 mean-pooling 改為 FeatEncoder 或 learned projection。
+- [ ] GPU 加速：CUDA 支援 BF16 native matmul。
 
 ## Milestone E：RALM / LocEnc（模組實作完成，測試通過）
 

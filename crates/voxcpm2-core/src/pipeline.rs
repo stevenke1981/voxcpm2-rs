@@ -110,7 +110,11 @@ impl VoxPipeline {
         let h_tslm = tslm.forward(&input_ids, 0)?; // [1, seq_len, 2048]
 
         // ── RALM forward ──
-        let mut ralm = RALM::load(&main_vb.pp("residual_lm"), &config.lm_config, dev, false)?;
+        let ralm_num_layers = config.residual_lm_num_layers;
+        let mut ralm = RALM::load(
+            &main_vb.pp("residual_lm"), &config.lm_config,
+            ralm_num_layers, dev, false,
+        )?;
         let h_ralm = ralm.forward(&h_tslm, 0)?; // [1, seq_len, 2048]
 
         // ── Text → DiT condition (1024-dim) ──
@@ -145,6 +149,102 @@ impl VoxPipeline {
         // Flatten to Vec<f32>
         let vals = waveform.squeeze(0)?.squeeze(0)?.to_vec1::<f32>()?;
         Ok(vals)
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::DType;
+
+    /// Verify the full pipeline shapes with real model weights.
+    /// Prerequisites:
+    ///   1. model.safetensors in models/VoxCPM2/
+    ///   2. audiovae.safetensors in models/VoxCPM2/
+    ///   3. tokenizer files in models/VoxCPM2/
+    #[test]
+    #[ignore = "requires model.safetensors + audiovae.safetensors in models/VoxCPM2/"]
+    fn test_full_pipeline_shapes() -> anyhow::Result<()> {
+        let dev = Device::Cpu;
+        let model_dir = if Path::new("models/VoxCPM2/model.safetensors").exists() {
+            PathBuf::from("models/VoxCPM2")
+        } else if Path::new("../../models/VoxCPM2/model.safetensors").exists() {
+            PathBuf::from("../../models/VoxCPM2")
+        } else {
+            anyhow::bail!("model.safetensors not found");
+        };
+
+        let config = VoxConfig::load(&model_dir)?;
+        let main_vb = weights::load_main_vb(&model_dir, &dev)?;
+        let audiovae_tensors = weights::load_audiovae_decoder_tensors(&model_dir, &dev)?;
+        let tokenizer = crate::tokenizer::VoxTokenizer::from_model_dir(&model_dir)?;
+
+        // ── Tokenize ──
+        let text = "Hello world.";
+        let tokens = tokenizer.encode(text)?;
+        assert!(!tokens.is_empty(), "tokenizer returned empty");
+        let input_ids = Tensor::from_slice(&tokens, &[1, tokens.len()], &dev)?.to_dtype(DType::I64)?;
+        let seq_len = tokens.len();
+        println!("Tokens: {tokens:?}");
+
+        // ── TSLM forward (28 layers) ──
+        let mut tslm = TSLM::load(&main_vb.pp("base_lm"), &config.lm_config, &dev, false)?;
+        let h_tslm = tslm.forward(&input_ids, 0)?;
+        assert_eq!(h_tslm.dims(), &[1, seq_len, 2048],
+            "TSLM output shape");
+        println!("TSLM forward OK: {:?}", h_tslm.shape());
+
+        // ── RALM forward (8 layers) ──
+        let mut ralm = RALM::load(
+            &main_vb.pp("residual_lm"), &config.lm_config,
+            config.residual_lm_num_layers, &dev, false,
+        )?;
+        let h_ralm = ralm.forward(&h_tslm, 0)?;
+        assert_eq!(h_ralm.dims(), &[1, seq_len, 2048],
+            "RALM output shape");
+        println!("RALM forward OK: {:?}", h_ralm.shape());
+
+        // ── Text→DiT projection ──
+        let (lm_to_dit, res_to_dit) = weights::load_text_to_dit_projections(&main_vb)?;
+        let cond_text = (lm_to_dit.forward(&h_tslm)? + res_to_dit.forward(&h_ralm)?)?;
+        assert_eq!(cond_text.dims(), &[1, seq_len, 1024],
+            "cond_text shape");
+        println!("Cond text OK: {:?}", cond_text.shape());
+
+        // ── LocDiT: diffusion generate ──
+        let feat_dim = config.feat_dim;
+        let sched = FlowMatchingScheduler::from_config(&config.dit_config.cfm_config);
+        let mut dit = LocDiT::load(
+            &main_vb.pp("feat_decoder"),
+            &config.dit_config,
+            feat_dim,
+            sched,
+        )?;
+        let cond_dit = project_cond_to_feat_dim(&cond_text, feat_dim)?;
+        assert_eq!(cond_dit.dims(), &[1, seq_len, feat_dim],
+            "cond_dit shape before LocDiT");
+        let latent = dit.generate(&cond_dit, 2, Some(42))?;
+        assert_eq!(latent.dims(), &[1, feat_dim, seq_len],
+            "LocDiT latent shape");
+        println!("LocDiT generate OK: {:?}", latent.shape());
+
+        // ── AudioVAE decode ──
+        let vae = AudioVAE::load(&audiovae_tensors, &config.audio_vae_config)?;
+        let waveform = vae.decode(&latent)?;
+        let (n, c, samples) = waveform.shape().dims3()?;
+        assert_eq!(n, 1, "AudioVAE batch dim");
+        assert_eq!(c, 1, "AudioVAE mono");
+        assert!(samples > 0, "AudioVAE produced empty output");
+        println!("AudioVAE decode OK: [{n}, {c}, {samples}]");
+
+        // Sanity check
+        vae.check_audio(&waveform)?;
+        println!("AudioVAE sanity check PASSED");
+
+        println!("\n✓ Full pipeline shape verification PASSED");
+        Ok(())
     }
 }
 

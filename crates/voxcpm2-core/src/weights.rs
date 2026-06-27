@@ -11,8 +11,9 @@ use std::path::Path;
 
 /// Load `model.safetensors` and return a VarBuilder covering all main model tensors.
 ///
-/// The returned VarBuilder uses BF16 dtype and can be `.pp("base_lm")`,
-/// `.pp("residual_lm")`, `.pp("feat_decoder")`, `.pp("lm_to_dit_proj")`, etc.
+/// CPU backend does NOT support BF16 matmul, so tensors are converted to F32.
+/// On CUDA (with `--features cuda`), BF16 matmul works natively and calling
+/// `.to_dtype(DType::BF16)` would match the model's storage format better.
 pub fn load_main_vb<'a>(model_dir: &'a Path, device: &'a Device) -> Result<VarBuilder<'a>> {
     let path = model_dir.join("model.safetensors");
     if !path.exists() {
@@ -21,8 +22,17 @@ pub fn load_main_vb<'a>(model_dir: &'a Path, device: &'a Device) -> Result<VarBu
             path.display()
         )));
     }
-    let tensors = candle_core::safetensors::load(path, device)?;
-    Ok(VarBuilder::from_tensors(tensors, DType::BF16, device))
+    let mut tensors = candle_core::safetensors::load(path, device)?;
+    // Convert all BF16 tensors to F32 (CPU doesn't support BF16 matmul).
+    let use_bf16 = matches!(device, Device::Cuda(_));
+    if !use_bf16 {
+        for (_, t) in tensors.iter_mut() {
+            if t.dtype() == DType::BF16 {
+                *t = t.to_dtype(DType::F32)?;
+            }
+        }
+    }
+    Ok(VarBuilder::from_tensors(tensors, DType::F32, device))
 }
 
 /// Load `audiovae.safetensors` with weight-norm fusion and return a VarBuilder.

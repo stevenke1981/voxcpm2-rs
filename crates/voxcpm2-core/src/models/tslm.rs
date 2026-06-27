@@ -27,7 +27,8 @@ impl TslmLayer {
         max_seq_len: usize,
         dev: &Device,
     ) -> Result<Self> {
-        let prefix = format!("base_lm.layers.{i}");
+        // vb already has "base_lm." prefix (applied by caller)
+        let prefix = format!("layers.{i}");
         let pp = vb.pp(&prefix);
         let eps = cfg.rms_norm_eps;
 
@@ -98,9 +99,9 @@ impl TSLM {
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            vb.pp("base_lm.embed_tokens"),
+            vb.pp("embed_tokens"),
         )?;
-        let norm = RMSNorm::load(vb, cfg.hidden_size, cfg.rms_norm_eps, "base_lm.norm")?;
+        let norm = RMSNorm::load(vb, cfg.hidden_size, cfg.rms_norm_eps, "norm")?;
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
