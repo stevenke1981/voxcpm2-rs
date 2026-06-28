@@ -282,26 +282,85 @@ impl VoxPipeline {
         }
 
         // ── Optional latent normalization (match Python distribution) ──
-        // Default: 0.7875 = 1.26 / 1.60 (Python std / Rust std ratio).
-        // This scales CFM latents closer to the AudioVAE training distribution,
-        // improving speech energy by ~3% and reducing rumble by ~3%.
-        const DEFAULT_LATENT_NORM: f64 = 0.7875;
-        let latent_norm = req.latent_norm_scale
-            .or(config.dit_config.latent_norm_scale)
-            .or(Some(DEFAULT_LATENT_NORM));
-        let latent_for_vae = if let Some(scale) = latent_norm {
-            let dtype = latent.dtype();
-            let scale_t = Tensor::full(scale as f32, &[1, 1, 1], dev)?
-                .to_dtype(dtype)?;
-            let scaled = latent.broadcast_mul(&scale_t)?;
-            if (scale - DEFAULT_LATENT_NORM).abs() < 1e-6 {
-                eprintln!("  [pipe] latent_norm: scale={scale} (default, matches Python)");
-            } else {
-                eprintln!("  [pipe] latent_norm: scale={scale} (user override)");
+        // Default: per-channel variance capping + global scale.
+        // Strategy:
+        //   1. Compute per-channel mean and std across time frames.
+        //   2. Cap per-channel std to PYTHON_CH_STD_MAX (1.6):
+        //      For channels where std > cap, normalize to N(0, cap).
+        //      Narrow channels retain their natural profile.
+        //   3. Apply global soft-scale: PYTHON_GLOBAL_STD / RUST_GLOBAL_STD.
+        // This preserves narrow-channel variance structure (speech info)
+        // while preventing wide-channel OOD saturation of AudioVAE.
+        // Use --latent-norm <scale> for pure global scaling.
+        // Use --latent-norm 1.0 to disable.
+        const PYTHON_CH_STD_CAP: f64 = 1.6;  // cap per-channel std to this
+        const PYTHON_GLOBAL_STD: f64 = 1.26;
+        const RUST_GLOBAL_STD: f64 = 1.60;
+        const DEFAULT_GLOBAL_SCALE: f64 = PYTHON_GLOBAL_STD / RUST_GLOBAL_STD; // 0.7875
+
+        fn is_disabled(s: f64) -> bool { (s - 1.0).abs() < 1e-6 }
+
+        let latent_for_vae = match req.latent_norm_scale {
+            None => {
+                // Default: per-channel variance cap + global scale
+                let d = latent.dtype();
+                let latent_work = latent.to_dtype(DType::F32)?;
+                let (_b, c, _t) = latent_work.dims3()?;
+
+                // 1. Per-channel mean and std
+                let mean = latent_work.mean_keepdim(2)?;          // [1, c, 1]
+                let var = latent_work.var_keepdim(2)?;            // [1, c, 1]
+                let min_var = Tensor::full(1e-8f32, &[1, c, 1], dev)?;
+                let std_ch = var.maximum(&min_var)?.sqrt()?;      // [1, c, 1]
+
+                // 2. Cap per-channel std: for channels where std > cap,
+                //    scale them down so that max(std) = PYTHON_CH_STD_CAP.
+                //    Scale factor per channel: min(1.0, cap / std)
+                let cap_t = Tensor::full(PYTHON_CH_STD_CAP as f32, &[1, c, 1], dev)?;
+                let one_t = Tensor::full(1.0f32, &[1, c, 1], dev)?;
+                // scale_per_ch = min(1.0, cap / std)  => for each ch: if std > cap, std * (cap/std) = cap
+                // inv_ratio = min(1.0, cap / std) = cap / max(std, cap)
+                // We compute: safe_std = max(std, cap), then inv_ratio = cap / safe_std
+                let std_safe = std_ch.maximum(&cap_t)?;   // [1, c, 1]
+                let inv_ratio = cap_t.broadcast_div(&std_safe)?; // [1, c, 1], in (0, 1]
+
+                // Apply per-channel scale: center and rescale
+                let centered = latent_work.broadcast_sub(&mean)?;  // [1, c, t]
+                let capped = centered.broadcast_mul(&inv_ratio)?;  // [1, c, t]
+                // Re-add mean (already near 0 for each channel)
+                let re_centered = capped.broadcast_add(&mean)?;    // [1, c, t]
+
+                // 3. Global soft-scale toward Python distribution
+                let scale_t = Tensor::full(DEFAULT_GLOBAL_SCALE as f32, &[1, 1, 1], dev)?;
+                let scaled = re_centered.broadcast_mul(&scale_t)?; // [1, c, t]
+
+                let out = scaled.to_dtype(d)?;
+
+                // Diagnostics
+                let ch_stds: Vec<f32> = std_ch.squeeze(0)?.squeeze(1)?.to_vec1::<f32>()?;
+                let avg_std: f32 = ch_stds.iter().sum::<f32>() / ch_stds.len() as f32;
+                let min_ch_std = ch_stds.iter().cloned().fold(f32::MAX, f32::min);
+                let max_ch_std = ch_stds.iter().cloned().fold(f32::MIN, f32::max);
+                let capped_chs = ch_stds.iter().filter(|&&s| s > PYTHON_CH_STD_CAP as f32).count();
+                eprintln!(
+                    "  [pipe] latent_norm: var-cap({PYTHON_CH_STD_CAP})+scale({DEFAULT_GLOBAL_SCALE}) \
+                     ch_stds: mean={avg_std:.4} range=[{min_ch_std:.4}, {max_ch_std:.4}] capped={capped_chs}/{c}"
+                );
+                out
             }
-            scaled
-        } else {
-            latent.clone()
+            Some(scale) if is_disabled(scale) => {
+                eprintln!("  [pipe] latent_norm: disabled (scale=1.0)");
+                latent.clone()
+            }
+            Some(scale) => {
+                // Custom global scale (backward compat)
+                let dtype = latent.dtype();
+                let scale_t = Tensor::full(scale as f32, &[1, 1, 1], dev)?
+                    .to_dtype(dtype)?;
+                let scaled = latent.broadcast_mul(&scale_t)?;
+                eprintln!("  [pipe] latent_norm: global scale={scale}");
+                scaled
+            }
         };
 
         // ── AudioVAE decode ──
@@ -320,9 +379,12 @@ impl VoxPipeline {
             );
         }
         // Save latent for Python verification
-        if let Ok(latent_f32) = latent_vae.squeeze(0) {
-            let latent_flat = latent_f32.flatten_all()?.to_vec1::<f32>()?;
-            let latent_bytes: Vec<u8> = latent_flat.iter().flat_map(|v| v.to_le_bytes()).collect();
+        if let Ok(latent_vae_2d) = latent_vae.squeeze(0) {
+            let latent_flat = latent_vae_2d.flatten_all()?.to_vec1::<f32>()?;
+            let mut latent_bytes = Vec::with_capacity(latent_flat.len() * 4);
+            for &v in &latent_flat {
+                latent_bytes.extend_from_slice(&v.to_le_bytes());
+            }
             if std::fs::write("output/latent_rust.f32", &latent_bytes).is_ok() {
                 eprintln!(
                     "  [pipe] Saved latent to output/latent_rust.f32 ({} frames x 64 ch)",
