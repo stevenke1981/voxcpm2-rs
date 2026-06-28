@@ -67,6 +67,7 @@
 - [ ] VRAM/RAM 估算與錯誤提示。
 - [x] 修正 GPU 語音不清楚主因：自回歸 loop 的初始 RALM prefill 與每步 FSQ 回寫對齊官方 Python `_inference()`。
 - [x] 修正 zero-shot tokenization：改用官方 `target_text + <|audio_start|>`，移除錯誤 chat template；預設 diffusion steps 提高到 30。
+- [x] 降低殘留雜音：輸出前執行 DC removal、12kHz conservative low-pass、edge fade、0.95 headroom limiter，降低 hiss/click/near-clip。
 
 ## Milestone I：egui
 

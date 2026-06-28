@@ -182,6 +182,10 @@
   - 改為官方 Python zero-shot 格式：`text_tokenizer(target_text) + <|audio_start|>`，不加 BOS/EOS/chat tokens
   - `voice_design` 改用官方 CLI 格式 `({control}){text}`
   - 將預設 diffusion steps 提高到 30；ASR 從錯亂文字改善為「你好，这是修正后的语音确实,现在应该更清楚」
+- [x] 降低殘留雜音（2026-06-28）：
+  - 根因：Rust 直接把 raw AudioVAE waveform 寫成 16-bit PCM；當 latent/decoder 還有 DC offset、12kHz 以上殘留與近滿刻度峰值時，會變成可聽 hiss/click 或削波感
+  - 新增 speech polish：移除 DC、12kHz 保守低通、5ms/12ms edge fade、0.95 PCM headroom limiter
+  - 同句驗證：`>=12kHz` 能量 `0.0169% -> 0.0036%`，`>=8kHz` 能量 `0.2211% -> 0.0714%`，near-clip `45 -> 0`
 - [ ] GPU 推理效能調校（目前 16 step AR + 5 CFM + AudioVAE CUDA 約 30-60s）
 
 ---

@@ -132,6 +132,14 @@ impl VoxPipeline {
             }
         }
 
+        if !req.dry_run {
+            let polish = audio::polish_generated_speech(&mut samples, sample_rate);
+            eprintln!(
+                "  [audio] polish: dc={:.6} peak_before={:.6} peak_after={:.6} headroom_gain={:.6}",
+                polish.dc_offset, polish.peak_before, polish.peak_after, polish.headroom_gain
+            );
+        }
+
         audio::check_audio(&samples)?;
         audio::write_wav_f32(&req.output_path, &samples, sample_rate)?;
         Ok(SynthResult {

@@ -72,3 +72,9 @@ VS 2022 Community 安裝於非預設路徑（`C:\Program Files\Microsoft Visual 
 - `...\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\cl.exe`（較舊版）
 
 確認 cl.exe 位置：`where.exe cl.exe`
+
+---
+## Lesson #4 — 2026-06-28
+**Trigger:** VoxCPM2 Rust CUDA 已能產生清楚人聲，但仍有些微雜音。
+**Rule:** 在寫出 generated speech 前，先量測 DC/peak/high-frequency energy；若 raw AudioVAE waveform 仍有 DC offset、近滿刻度峰值或 12kHz 以上殘留，套用保守輸出閘（DC removal、light low-pass、edge fade、headroom limiter）再寫 PCM，並用 ASR 確認人聲仍可辨識。
+**Source:** reduce residual speech noise
