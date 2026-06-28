@@ -411,25 +411,23 @@ mod tests {
 
     /// ── Parity test: compare Rust tokenizer output with Python golden ──
     #[derive(serde::Deserialize)]
-    #[allow(dead_code)]
     struct GoldenCase {
         text: String,
         ids_no_special: Vec<u32>,
         ids_with_special: Vec<u32>,
+        #[allow(dead_code)]
         decoded: String,
     }
 
     #[derive(serde::Deserialize)]
-    #[allow(dead_code)]
     struct ChatCase {
-        chat: Option<bool>,
         messages: Vec<ChatMessage>,
         ids: Vec<u32>,
     }
 
     #[derive(serde::Deserialize)]
-    #[allow(dead_code)]
     struct GoldenFile {
+        #[allow(dead_code)]
         special_ids: std::collections::HashMap<String, serde_json::Value>,
         cases: Vec<serde_json::Value>,
     }

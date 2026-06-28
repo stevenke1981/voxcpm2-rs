@@ -88,3 +88,8 @@ VS 2022 Community 安裝於非預設路徑（`C:\Program Files\Microsoft Visual 
 **Trigger:** Prefill h_lm/h_res matched perfectly between Python and Rust (cos_sim > 0.9999), but CFM pred_feat diverged completely (cos_sim ~0.05) even after fixing the cond bug.
 **Rule:** CFM noise generation (`make_randn` Box-Muller vs `torch.randn`) produces completely different noise tensors even with the same seed. This is an expected RNG implementation difference — Box-Muller (Rust) vs Philox/Ziggurat (PyTorch CUDA) are fundamentally different algorithms. The resulting trajectories diverge from the first step. For perfect reproducibility, pre-generate noise in Python and load as a static tensor in Rust during comparison runs.
 **Source:** `unified_cfm.rs:make_randn` vs `unified_cfm.py:torch.randn`
+
+## Lesson #7 — 2026-06-29
+**Trigger:** After CFM cond/latent fixes and 12kHz low-pass, generated speech was intelligible but still had audible residual noise.
+**Rule:** When 12kHz+ hiss is already low, measure sub-bass and quiet-frame RMS before adding more low-pass. If 0-80Hz or quiet-frame RMS remains elevated, add a conservative high-pass and soft expander; do not lower CFG blindly because it can reduce high-frequency noise while worsening text intelligibility.
+**Source:** third residual noise reduction pass

@@ -36,7 +36,10 @@ fn manual_conv1d(x: &Tensor, w: &Tensor, b: Option<&Tensor>, pad: usize) -> Tens
 
     // Debug: check padded shape and first few values
     eprintln!("  [manual dd] padded shape: {:?}", x_pad.shape());
-    eprintln!("  [manual dd] padded first 10 of channel 0: {:?}", &x_vals[..10]);
+    eprintln!(
+        "  [manual dd] padded first 10 of channel 0: {:?}",
+        &x_vals[..10]
+    );
 
     for b_i in 0..batch {
         for co in 0..c_out {
@@ -99,10 +102,12 @@ fn check_candle_conv1d() {
     let w_flat: Vec<f32> = weight.flatten_all().unwrap().to_vec1().unwrap();
     let i_flat: Vec<f32> = input.flatten_all().unwrap().to_vec1().unwrap();
     let e_flat: Vec<f32> = expected.flatten_all().unwrap().to_vec1().unwrap();
-    eprintln!("npy: weight[0..5]={:?} weight[{:?}]={:.8}",
+    eprintln!(
+        "npy: weight[0..5]={:?} weight[{:?}]={:.8}",
         &w_flat[..5.min(w_flat.len())],
-        (w_flat.len()-5.min(w_flat.len()))..w_flat.len(),
-        w_flat[w_flat.len()-1]);
+        (w_flat.len() - 5.min(w_flat.len()))..w_flat.len(),
+        w_flat[w_flat.len() - 1]
+    );
     eprintln!("npy: input[0][0][0..5]={:?}", &i_flat[..5]);
     eprintln!("npy: expected[0][0][0..5]={:?}", &e_flat[..5]);
     // Check specific element: weight[0, 15, 3]
@@ -122,9 +127,11 @@ fn check_candle_conv1d() {
     let manual_v: Vec<f32> = manual_out.flatten_all().unwrap().to_vec1().unwrap();
     let expected_v: Vec<f32> = expected.flatten_all().unwrap().to_vec1().unwrap();
     let mut max_diff = 0.0f32;
-    for (i, (m, e)) in manual_v.iter().zip(expected_v.iter()).enumerate() {
+    for (_, (m, e)) in manual_v.iter().zip(expected_v.iter()).enumerate() {
         let diff = (m - e).abs();
-        if diff > max_diff { max_diff = diff; }
+        if diff > max_diff {
+            max_diff = diff;
+        }
     }
     eprintln!("Manual conv vs Python: max_diff = {max_diff:.8}");
     assert!(max_diff < EPS, "Manual conv mismatch: {max_diff:.8}");
@@ -141,9 +148,11 @@ fn check_candle_conv1d() {
     let candle_out = conv.forward(&input).unwrap();
     let candle_v: Vec<f32> = candle_out.flatten_all().unwrap().to_vec1().unwrap();
     let mut max_diff2 = 0.0f32;
-    for (i, (c, m)) in candle_v.iter().zip(manual_v.iter()).enumerate() {
+    for (_, (c, m)) in candle_v.iter().zip(manual_v.iter()).enumerate() {
         let diff = (c - m).abs();
-        if diff > max_diff2 { max_diff2 = diff; }
+        if diff > max_diff2 {
+            max_diff2 = diff;
+        }
     }
     eprintln!("Candle Conv1d vs manual: max_diff = {max_diff2:.8}");
     if max_diff2 > EPS {
@@ -151,7 +160,10 @@ fn check_candle_conv1d() {
         for i in 0..20.min(candle_v.len()) {
             let cv = candle_v[i];
             let mv = manual_v[i];
-            eprintln!("  [{i}] candle={cv:.8} manual={mv:.8} diff={:.8}", (cv - mv).abs());
+            eprintln!(
+                "  [{i}] candle={cv:.8} manual={mv:.8} diff={:.8}",
+                (cv - mv).abs()
+            );
         }
     }
     assert!(max_diff2 < EPS, "Candle Conv1d mismatch: {max_diff2:.8}");

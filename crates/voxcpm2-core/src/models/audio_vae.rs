@@ -45,7 +45,7 @@ use std::collections::HashMap;
 fn load_1d(map: &HashMap<String, Tensor>, name: &str, len: usize) -> Result<Tensor> {
     let t = map
         .get(name)
-        .unwrap_or_else(|| panic!("missing tensor: {name}"));
+        .ok_or_else(|| candle_core::Error::Msg(format!("missing tensor: {name}")))?;
     if t.shape().dims() == [1, len, 1] {
         // snake alpha or bias: [1, C, 1] → squeeze to [C]
         t.squeeze(0)?.squeeze(1)
@@ -62,12 +62,13 @@ fn load_conv_weight(
 ) -> Result<Tensor> {
     let t = map
         .get(name)
-        .unwrap_or_else(|| panic!("missing tensor: {name}"));
+        .ok_or_else(|| candle_core::Error::Msg(format!("missing tensor: {name}")))?;
     let actual: Vec<usize> = t.shape().dims().to_vec();
-    assert_eq!(
-        actual, shape,
-        "shape mismatch for {name}: expected {shape:?}, got {actual:?}"
-    );
+    if actual != shape {
+        return Err(candle_core::Error::Msg(format!(
+            "shape mismatch for {name}: expected {shape:?}, got {actual:?}"
+        )));
+    }
     Ok(t.clone())
 }
 
@@ -130,12 +131,21 @@ struct CausalResidualUnit {
 }
 
 impl CausalResidualUnit {
-    fn load(map: &HashMap<String, Tensor>, prefix: &str, channels: usize, dilation: usize) -> Result<Self> {
+    fn load(
+        map: &HashMap<String, Tensor>,
+        prefix: &str,
+        channels: usize,
+        dilation: usize,
+    ) -> Result<Self> {
         let snake0 = Snake1d::load(map, &format!("{prefix}.block.0.alpha"), channels)?;
 
         let kernel = 7; // fixed kernel size for depthwise conv
         let _pad = ((kernel - 1) * dilation) / 2; // causal pad: left-only (used for reference)
-        let dw_weight = load_conv_weight(map, &format!("{prefix}.block.1.weight"), &[channels, 1, kernel])?;
+        let dw_weight = load_conv_weight(
+            map,
+            &format!("{prefix}.block.1.weight"),
+            &[channels, 1, kernel],
+        )?;
         let dw_bias = load_1d(map, &format!("{prefix}.block.1.bias"), channels)?;
         let depthwise = Conv1d::new(
             dw_weight,
@@ -210,34 +220,41 @@ struct SrFiLM {
 }
 
 impl SrFiLM {
-    fn load(map: &HashMap<String, Tensor>, prefix: &str, channels: usize) -> Result<Self> {
+    fn load(
+        map: &HashMap<String, Tensor>,
+        prefix: &str,
+        channels: usize,
+        bin_idx: usize,
+    ) -> Result<Self> {
         let scale_key = format!("{prefix}.scale_embed.weight");
         let bias_key = format!("{prefix}.bias_embed.weight");
         let scale_embed = map
             .get(&scale_key)
-            .unwrap_or_else(|| panic!("missing SR cond tensor: {scale_key}"))
+            .ok_or_else(|| candle_core::Error::Msg(format!("missing SR cond tensor: {scale_key}")))?
             .clone();
         let bias_embed = map
             .get(&bias_key)
-            .unwrap_or_else(|| panic!("missing SR cond tensor: {bias_key}"))
+            .ok_or_else(|| candle_core::Error::Msg(format!("missing SR cond tensor: {bias_key}")))?
             .clone();
         // Validate shapes
-        assert_eq!(
-            scale_embed.shape().dims(),
-            &[4, channels],
-            "{scale_key} expected [4, {channels}], got {:?}",
-            scale_embed.shape().dims()
-        );
-        assert_eq!(
-            bias_embed.shape().dims(),
-            &[4, channels],
-            "{bias_key} expected [4, {channels}], got {:?}",
-            bias_embed.shape().dims()
-        );
+        let scale_dims = scale_embed.shape().dims();
+        if scale_dims != &[4, channels] {
+            return Err(candle_core::Error::Msg(format!(
+                "{scale_key} expected [4, {channels}], got {:?}",
+                scale_dims
+            )));
+        }
+        let bias_dims = bias_embed.shape().dims();
+        if bias_dims != &[4, channels] {
+            return Err(candle_core::Error::Msg(format!(
+                "{bias_key} expected [4, {channels}], got {:?}",
+                bias_dims
+            )));
+        }
         Ok(Self {
             scale_embed,
             bias_embed,
-            bin_idx: 3, // default to highest bin
+            bin_idx,
         })
     }
 
@@ -310,7 +327,8 @@ impl CausalDecoderBlock {
         let mut sub_blocks = Vec::new();
         for (i, &dilation) in dilations.iter().enumerate() {
             let idx = i + 2; // block.2, block.3, block.4
-            let sub = CausalResidualUnit::load(map, &format!("{prefix}.block.{idx}"), c_out, dilation)?;
+            let sub =
+                CausalResidualUnit::load(map, &format!("{prefix}.block.{idx}"), c_out, dilation)?;
             sub_blocks.push(sub);
         }
 
@@ -362,11 +380,11 @@ impl CausalDecoderBlock {
 // ---------------------------------------------------------------------------
 
 pub struct AudioVAE {
-    model_0: Conv1d,                 // depthwise 64→64, k=7, causal
-    model_1: Conv1d,                 // pointwise 64→2048, k=1
+    model_0: Conv1d,                    // depthwise 64→64, k=7, causal
+    model_1: Conv1d,                    // pointwise 64→2048, k=1
     up_blocks: Vec<CausalDecoderBlock>, // model 2–7
-    model_8: Snake1d,                // Snake1d(32) before final conv
-    model_9: Conv1d,                 // 32→1, k=7, causal
+    model_8: Snake1d,                   // Snake1d(32) before final conv
+    model_9: Conv1d,                    // 32→1, k=7, causal
     pub sample_rate: u32,
     pub out_sample_rate: u32,
 }
@@ -378,10 +396,7 @@ pub struct AudioVAE {
 ///   sample_rate < boundaries[1] → bin 1
 ///   sample_rate < boundaries[2] → bin 2
 ///   else → bin 3
-fn compute_sr_bin(
-    sample_rate: u32,
-    sr_bin_boundaries: &[usize],
-) -> usize {
+fn compute_sr_bin(sample_rate: u32, sr_bin_boundaries: &[usize]) -> usize {
     for (i, &boundary) in sr_bin_boundaries.iter().enumerate() {
         if (sample_rate as usize) < boundary {
             return i;
@@ -416,14 +431,11 @@ impl AudioVAE {
             let n = i + 2; // model.2 .. model.7
             let prefix = format!("decoder.sr_cond_model.{n}");
             if tensors.contains_key(&format!("{prefix}.scale_embed.weight")) {
-                let mut film = SrFiLM::load(tensors, &prefix, ch)?;
-                film.bin_idx = sr_bin;
+                let film = SrFiLM::load(tensors, &prefix, ch, sr_bin)?;
                 sr_film_modules.push(Some(film));
                 eprintln!("[AudioVAE] Loaded SR FiLM for model.{n} ({ch} ch)");
             } else {
-                eprintln!(
-                    "[AudioVAE] WARNING: SR FiLM tensors not found for model.{n} — skipping"
-                );
+                eprintln!("[AudioVAE] WARNING: SR FiLM tensors not found for model.{n} — skipping");
                 sr_film_modules.push(None);
             }
         }
@@ -519,28 +531,89 @@ impl AudioVAE {
         // model.0: Causal depthwise Conv1d(64, 64, k=7, groups=64) — no activation
         h = causal_pad(&h, 7, 1, 1)?;
         h = self.model_0.forward(&h)?;
-        eprintln!("  [AudioVAE] model.0: shape={:?} peak={:.6}", h.shape(), h.abs()?.flatten_all()?.max_keepdim(0)?.squeeze(0)?.to_vec0::<f32>()?);
+        #[cfg(feature = "debug-tensors")]
+        eprintln!(
+            "  [AudioVAE] model.0: shape={:?} peak={:.6}",
+            h.shape(),
+            h.abs()?
+                .flatten_all()?
+                .max_keepdim(0)?
+                .squeeze(0)?
+                .to_vec0::<f32>()?
+        );
 
         // model.1: pointwise Conv1d(64, 2048, k=1) — no activation
         h = self.model_1.forward(&h)?;
-        eprintln!("  [AudioVAE] model.1: shape={:?} peak={:.6} mean={:.6}", h.shape(), h.abs()?.flatten_all()?.max_keepdim(0)?.squeeze(0)?.to_vec0::<f32>()?, h.mean(2)?.mean(1)?.to_vec1::<f32>()?[0]);
+        #[cfg(feature = "debug-tensors")]
+        eprintln!(
+            "  [AudioVAE] model.1: shape={:?} peak={:.6} mean={:.6}",
+            h.shape(),
+            h.abs()?
+                .flatten_all()?
+                .max_keepdim(0)?
+                .squeeze(0)?
+                .to_vec0::<f32>()?,
+            h.mean(2)?.mean(1)?.to_vec1::<f32>()?[0]
+        );
 
         // model.2–7: CausalDecoderBlocks (with SR FiLM if loaded)
-        for (i, block) in self.up_blocks.iter().enumerate() {
+        #[allow(unused_variables)]
+        for (block_idx, block) in self.up_blocks.iter().enumerate() {
             h = block.forward(&h)?;
-            eprintln!("  [AudioVAE] model.{}: shape={:?} peak={:.6} mean={:.6}", i+2, h.shape(), h.abs()?.flatten_all()?.max_keepdim(0)?.squeeze(0)?.to_vec0::<f32>()?, h.mean(2)?.mean(1)?.to_vec1::<f32>()?[0]);
+            #[cfg(feature = "debug-tensors")]
+            eprintln!(
+                "  [AudioVAE] model.{}: shape={:?} peak={:.6} mean={:.6}",
+                block_idx + 2,
+                h.shape(),
+                h.abs()?
+                    .flatten_all()?
+                    .max_keepdim(0)?
+                    .squeeze(0)?
+                    .to_vec0::<f32>()?,
+                h.mean(2)?.mean(1)?.to_vec1::<f32>()?[0]
+            );
         }
 
         // model.8: Snake1d activation before final conv
         h = self.model_8.forward(&h)?;
-        eprintln!("  [AudioVAE] model.8: shape={:?} peak={:.6} mean={:.6}", h.shape(), h.abs()?.flatten_all()?.max_keepdim(0)?.squeeze(0)?.to_vec0::<f32>()?, h.mean(2)?.mean(1)?.to_vec1::<f32>()?[0]);
+        #[cfg(feature = "debug-tensors")]
+        eprintln!(
+            "  [AudioVAE] model.8: shape={:?} peak={:.6} mean={:.6}",
+            h.shape(),
+            h.abs()?
+                .flatten_all()?
+                .max_keepdim(0)?
+                .squeeze(0)?
+                .to_vec0::<f32>()?,
+            h.mean(2)?.mean(1)?.to_vec1::<f32>()?[0]
+        );
 
         // model.9: Causal Conv1d(32, 1, k=7) + Tanh
         h = causal_pad(&h, 7, 1, 1)?;
         h = self.model_9.forward(&h)?;
-        eprintln!("  [AudioVAE] model.9 (pre-tanh): shape={:?} peak={:.6} mean={:.6}", h.shape(), h.abs()?.flatten_all()?.max_keepdim(0)?.squeeze(0)?.to_vec0::<f32>()?, h.mean(2)?.mean(1)?.to_vec1::<f32>()?[0]);
+        #[cfg(feature = "debug-tensors")]
+        eprintln!(
+            "  [AudioVAE] model.9 (pre-tanh): shape={:?} peak={:.6} mean={:.6}",
+            h.shape(),
+            h.abs()?
+                .flatten_all()?
+                .max_keepdim(0)?
+                .squeeze(0)?
+                .to_vec0::<f32>()?,
+            h.mean(2)?.mean(1)?.to_vec1::<f32>()?[0]
+        );
         h = h.tanh()?;
-        eprintln!("  [AudioVAE] tanh out: shape={:?} peak={:.6} mean={:.6}", h.shape(), h.abs()?.flatten_all()?.max_keepdim(0)?.squeeze(0)?.to_vec0::<f32>()?, h.mean(2)?.mean(1)?.to_vec1::<f32>()?[0]);
+        #[cfg(feature = "debug-tensors")]
+        eprintln!(
+            "  [AudioVAE] tanh out: shape={:?} peak={:.6} mean={:.6}",
+            h.shape(),
+            h.abs()?
+                .flatten_all()?
+                .max_keepdim(0)?
+                .squeeze(0)?
+                .to_vec0::<f32>()?,
+            h.mean(2)?.mean(1)?.to_vec1::<f32>()?[0]
+        );
 
         Ok(h)
     }
@@ -596,12 +669,8 @@ impl CausalEncoderBlock {
         let dilations = [1usize, 3, 9];
         let mut sub_blocks = Vec::new();
         for (i, &dilation) in dilations.iter().enumerate() {
-            let sub = CausalResidualUnit::load(
-                map,
-                &format!("{prefix}.block.{i}"),
-                c_in,
-                dilation,
-            )?;
+            let sub =
+                CausalResidualUnit::load(map, &format!("{prefix}.block.{i}"), c_in, dilation)?;
             sub_blocks.push(sub);
         }
 
@@ -626,7 +695,13 @@ impl CausalEncoderBlock {
             },
         );
 
-        Ok(Self { sub_blocks, snake, down_conv, kernel, stride })
+        Ok(Self {
+            sub_blocks,
+            snake,
+            down_conv,
+            kernel,
+            stride,
+        })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -647,11 +722,11 @@ impl CausalEncoderBlock {
 /// Full causal encoder: block.0 → 4× CausalEncoderBlock → fc_mu (+ fc_logvar loaded)
 #[derive(Debug, Clone)]
 pub struct CausalEncoder {
-    block_0: Conv1d,                          // 1→128, k=7 (no activation)
-    down_blocks: Vec<CausalEncoderBlock>,      // blocks 1–4
-    fc_mu: Conv1d,                             // 2048→64, k=3
+    block_0: Conv1d,                      // 1→128, k=7 (no activation)
+    down_blocks: Vec<CausalEncoderBlock>, // blocks 1–4
+    fc_mu: Conv1d,                        // 2048→64, k=3
     #[allow(dead_code)]
-    fc_logvar: Conv1d,                         // 2048→64, k=3 (only used for training)
+    fc_logvar: Conv1d, // 2048→64, k=3 (only used for training)
 }
 
 impl CausalEncoder {
@@ -672,17 +747,20 @@ impl CausalEncoder {
 
         // blocks 1–4: CausalEncoderBlock
         let spec: [(usize, usize, usize, usize, usize); 4] = [
-            (1, 128, 256, 4, 2),   // stride=2, k=4
-            (2, 256, 512, 10, 5),  // stride=5, k=10
-            (3, 512, 1024, 16, 8), // stride=8, k=16
-            (4, 1024, 2048, 16, 8),// stride=8, k=16
+            (1, 128, 256, 4, 2),    // stride=2, k=4
+            (2, 256, 512, 10, 5),   // stride=5, k=10
+            (3, 512, 1024, 16, 8),  // stride=8, k=16
+            (4, 1024, 2048, 16, 8), // stride=8, k=16
         ];
         let mut down_blocks = Vec::new();
         for &(n, c_in, c_out, kernel, stride) in &spec {
             let block = CausalEncoderBlock::load(
                 tensors,
                 &format!("encoder.block.{n}"),
-                c_in, c_out, kernel, stride,
+                c_in,
+                c_out,
+                kernel,
+                stride,
             )?;
             down_blocks.push(block);
         }
@@ -692,7 +770,12 @@ impl CausalEncoder {
         let fc_mu = Self::load_fc(tensors, "encoder.fc_mu", 64, 2048, 3)?;
         let fc_logvar = Self::load_fc(tensors, "encoder.fc_logvar", 64, 2048, 3)?;
 
-        Ok(Self { block_0, down_blocks, fc_mu, fc_logvar })
+        Ok(Self {
+            block_0,
+            down_blocks,
+            fc_mu,
+            fc_logvar,
+        })
     }
 
     fn load_fc(
@@ -702,11 +785,7 @@ impl CausalEncoder {
         in_ch: usize,
         kernel: usize,
     ) -> Result<Conv1d> {
-        let w = load_conv_weight(
-            map,
-            &format!("{prefix}.weight"),
-            &[out_ch, in_ch, kernel],
-        )?;
+        let w = load_conv_weight(map, &format!("{prefix}.weight"), &[out_ch, in_ch, kernel])?;
         let b = load_1d(map, &format!("{prefix}.bias"), out_ch)?;
         Ok(Conv1d::new(
             w,
@@ -754,7 +833,10 @@ impl CausalEncoder {
 impl AudioVAE {
     /// Create an encoder from the same fused tensor map.
     /// The encoder is separate from the decoder; both share the same safetensors.
-    pub fn load_encoder(tensors: &HashMap<String, Tensor>, cfg: &AudioVaeConfig) -> Result<CausalEncoder> {
+    pub fn load_encoder(
+        tensors: &HashMap<String, Tensor>,
+        cfg: &AudioVaeConfig,
+    ) -> Result<CausalEncoder> {
         CausalEncoder::load(tensors, cfg)
     }
 }
@@ -767,11 +849,67 @@ impl AudioVAE {
 mod tests {
     use super::*;
     use crate::weights;
+    use candle_core::{DType, Device};
 
-    #[test]
-    fn audiovae_smoke() -> Result<()> {
-        // Verify config construct
-        let _cfg = AudioVaeConfig {
+    // =======================================================================
+    // Helper: Build a HashMap of zero-weight tensors for CausalEncoder testing.
+    // All conv weights = 0, all snake alphas = 1 (to avoid division by zero in
+    // snake's 1/alpha term).
+    // =======================================================================
+    fn mock_encoder_tensors(dev: &Device) -> HashMap<String, Tensor> {
+        let mut map = HashMap::new();
+        let dt = DType::F32;
+
+        macro_rules! z {
+            ($name:expr, $shape:expr) => {
+                map.insert($name.to_string(), Tensor::zeros($shape, dt, dev).unwrap());
+            };
+        }
+        macro_rules! one {
+            ($name:expr, $sh:expr) => {
+                map.insert($name.to_string(), Tensor::ones($sh, dt, dev).unwrap());
+            };
+        }
+
+        // block.0: CausalConv1d(1→128, k=7)
+        z!("encoder.block.0.weight", &[128, 1, 7]);
+        z!("encoder.block.0.bias", &[128]);
+
+        // blocks 1–4
+        let specs: [(usize, usize, usize, usize); 4] = [
+            (1, 128, 256, 4),
+            (2, 256, 512, 10),
+            (3, 512, 1024, 16),
+            (4, 1024, 2048, 16),
+        ];
+
+        for &(n, c_in, c_out, kernel) in &specs {
+            let prefix = format!("encoder.block.{n}");
+            for i in 0..3 {
+                let cru = format!("{prefix}.block.{i}");
+                one!(&format!("{cru}.block.0.alpha"), &[c_in]);
+                z!(&format!("{cru}.block.1.weight"), &[c_in, 1, 7]);
+                z!(&format!("{cru}.block.1.bias"), &[c_in]);
+                one!(&format!("{cru}.block.2.alpha"), &[c_in]);
+                z!(&format!("{cru}.block.3.weight"), &[c_in, c_in, 1]);
+                z!(&format!("{cru}.block.3.bias"), &[c_in]);
+            }
+            one!(&format!("{prefix}.block.3.alpha"), &[c_in]);
+            z!(&format!("{prefix}.block.4.weight"), &[c_out, c_in, kernel]);
+            z!(&format!("{prefix}.block.4.bias"), &[c_out]);
+        }
+
+        // fc_mu + fc_logvar
+        z!("encoder.fc_mu.weight", &[64, 2048, 3]);
+        z!("encoder.fc_mu.bias", &[64]);
+        z!("encoder.fc_logvar.weight", &[64, 2048, 3]);
+        z!("encoder.fc_logvar.bias", &[64]);
+
+        map
+    }
+
+    fn test_audiovae_config() -> AudioVaeConfig {
+        AudioVaeConfig {
             encoder_dim: 128,
             encoder_rates: vec![2, 5, 8, 8],
             latent_dim: 64,
@@ -780,7 +918,133 @@ mod tests {
             sr_bin_boundaries: vec![20000, 30000, 40000],
             sample_rate: 16000,
             out_sample_rate: 48000,
+        }
+    }
+
+    #[test]
+    fn audiovae_smoke() -> Result<()> {
+        let _cfg = test_audiovae_config();
+        Ok(())
+    }
+
+    // ── causal_pad ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn causal_pad_left_only() -> Result<()> {
+        let dev = Device::Cpu;
+        // [N, C, L] = [1, 3, 10], all ones
+        let x = Tensor::ones(&[1, 3, 10], DType::F32, &dev)?;
+
+        // kernel=7, dilation=1 → left_pad = 6
+        let y = causal_pad(&x, 7, 1, 1)?;
+        assert_eq!(y.dims(), &[1, 3, 16], "7/1 pad: 10+6=16");
+
+        // kernel=10, dilation=3 → left_pad = 27
+        let y2 = causal_pad(&x, 10, 3, 1)?;
+        assert_eq!(y2.dims(), &[1, 3, 37], "10/3 pad: 10+27=37");
+
+        // kernel=7, dilation=1, stride=2 → same left_pad = 6 (stride ignored)
+        let y3 = causal_pad(&x, 7, 1, 2)?;
+        assert_eq!(y3.dims(), &[1, 3, 16], "stride ignored");
+
+        // kernel=1 → left_pad = 0 → identity
+        let y4 = causal_pad(&x, 1, 1, 1)?;
+        assert_eq!(y4.dims(), x.dims(), "k=1 → no pad");
+
+        // Verify leftmost 6 elements are zeros
+        let left_six = y.narrow(2, 0, 6)?;
+        let sum = left_six.sum_all()?.to_scalar::<f32>()?;
+        assert_eq!(sum, 0.0, "left pad should be zeros");
+
+        // Verify rightmost 10 elements are unchanged (ones)
+        let right_ten = y.narrow(2, 6, 10)?;
+        let sum = right_ten.sum_all()?.to_scalar::<f32>()?;
+        assert_eq!(sum, 30.0, "original region should be unchanged");
+
+        Ok(())
+    }
+
+    // ── Snake1d ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn snake1d_forward_shape() -> Result<()> {
+        let dev = Device::Cpu;
+        // alpha = 1.0 (safe, avoids 1/0)
+        let alpha = Tensor::ones(&[64], DType::F32, &dev)?;
+        let snake = Snake1d { alpha };
+
+        // Input [1, 64, 30]
+        let x = Tensor::randn(-1.0f32, 1.0f32, &[1, 64, 30], &dev)?;
+        let y = snake.forward(&x)?;
+        assert_eq!(y.shape(), x.shape(), "Snake1d should preserve shape");
+
+        // snake(0) = 0 + (1/1)*sin(0)^2 = 0
+        let zero = Tensor::zeros(&[1, 64, 30], DType::F32, &dev)?;
+        let yz = snake.forward(&zero)?;
+        let max_abs = yz.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(max_abs < 1e-5, "Snake1d(0) should be ~0, got {max_abs:.2e}");
+
+        Ok(())
+    }
+
+    // ── SrFiLM ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn srfilm_forward_shape() -> Result<()> {
+        let dev = Device::Cpu;
+        // 4 SR bins × 128 channels
+        let scale = Tensor::ones(&[4, 128], DType::F32, &dev)?;
+        let bias = Tensor::zeros(&[4, 128], DType::F32, &dev)?;
+        let film = SrFiLM {
+            scale_embed: scale,
+            bias_embed: bias,
+            bin_idx: 0,
         };
+
+        // Input [N, C, L] = [2, 128, 50]
+        let x = Tensor::randn(-1.0f32, 1.0f32, &[2, 128, 50], &dev)?;
+        let y = film.forward(&x)?;
+        assert_eq!(y.shape(), x.shape(), "SrFiLM should preserve shape");
+
+        // With scale=1, bias=0 → y == x
+        let diff = (y - &x)?.abs()?.sum_all()?.to_scalar::<f32>()?;
+        assert!(
+            diff < 1e-5,
+            "SrFiLM with unit scale/zero bias should be identity"
+        );
+
+        // Test different bin selection
+        let film2 = SrFiLM {
+            scale_embed: Tensor::full(2.0f32, &[4, 128], &dev)?,
+            bias_embed: Tensor::full(1.0f32, &[4, 128], &dev)?,
+            bin_idx: 2,
+        };
+        let y2 = film2.forward(&x)?;
+        assert_eq!(y2.shape(), x.shape(), "bin 2 should also preserve shape");
+
+        Ok(())
+    }
+
+    // ── CausalEncoder ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn causal_encoder_encode_shape() -> Result<()> {
+        let dev = Device::Cpu;
+        let map = mock_encoder_tensors(&dev);
+        let cfg = test_audiovae_config();
+        let encoder = CausalEncoder::load(&map, &cfg)?;
+
+        // 1 second mono audio at 16 kHz
+        let audio = Tensor::randn(-0.5f32, 0.5f32, &[1, 1, 16000], &dev)?;
+        let latent = encoder.encode(&audio)?;
+
+        // Total downsampling = 2*5*8*8 = 640 → 16000/640 = 25 frames
+        assert_eq!(latent.dims(), &[1, 64, 25], "CausalEncoder output shape");
+
+        // Verify output is all zeros (zero-weight encoder → zero latent)
+        let peak = latent.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(peak < 1e-5, "zero-weight encoder should produce ~zero");
+
         Ok(())
     }
 
@@ -818,14 +1082,15 @@ mod tests {
         let latent_bytes = std::fs::read("test_latent_8frames.f32")
             .map_err(|e| candle_core::Error::Msg(format!("read test latent: {e}")))?;
         // [1, 64, 8] = 512 floats
-        let latent = Tensor::from_raw_buffer(
-            &latent_bytes,
-            candle_core::DType::F32,
-            &[1, 64, 8],
-            &dev,
-        )?;
+        let latent =
+            Tensor::from_raw_buffer(&latent_bytes, candle_core::DType::F32, &[1, 64, 8], &dev)?;
         eprintln!("[Rust] Input latent: shape={:?}", latent.shape());
-        let peak = latent.abs()?.flatten_all()?.max_keepdim(0)?.squeeze(0)?.to_vec0::<f32>()?;
+        let peak = latent
+            .abs()?
+            .flatten_all()?
+            .max_keepdim(0)?
+            .squeeze(0)?
+            .to_vec0::<f32>()?;
         let mean = latent.mean(2)?.mean(1)?.to_vec1::<f32>()?[0];
         let sq = latent.sqr()?.mean(2)?.mean(1)?.to_vec1::<f32>()?[0];
         let std_val = (sq - mean * mean).sqrt();
@@ -833,7 +1098,12 @@ mod tests {
 
         let waveform = vae.decode(&latent)?;
         let (n, c, samples) = waveform.shape().dims3()?;
-        let peak_v = waveform.abs()?.flatten_all()?.max_keepdim(0)?.squeeze(0)?.to_vec0::<f32>()?;
+        let peak_v = waveform
+            .abs()?
+            .flatten_all()?
+            .max_keepdim(0)?
+            .squeeze(0)?
+            .to_vec0::<f32>()?;
         let mean_v = waveform.mean(2)?.mean(1)?.to_vec1::<f32>()?[0];
         eprintln!("[Rust] Output: [{n}, {c}, {samples}], peak={peak_v:.6}, mean={mean_v:.6}");
         eprintln!("[Python] Output: [1, 1, 15360], peak=0.310290, mean=-0.002143");
@@ -872,12 +1142,20 @@ mod tests {
         assert_eq!(n, 1, "batch dim");
         assert_eq!(c, 1, "mono audio");
         assert!(samples > 30000, "expected ~30720 samples, got {samples}");
-        let peak_v = waveform.abs()?.flatten_all()?.max_keepdim(0)?.squeeze(0)?.to_vec0::<f32>()?;
+        let peak_v = waveform
+            .abs()?
+            .flatten_all()?
+            .max_keepdim(0)?
+            .squeeze(0)?
+            .to_vec0::<f32>()?;
         println!("AudioVAE decode shape OK: [{n}, {c}, {samples}], peak={peak_v:.6}");
         // With SR conditioning enabled, peak should be significantly higher
         // than the ~5e-5 seen without SR conditioning.
         // However, for random latent input the exact peak depends on the latent values.
-        assert!(peak_v > 1e-6, "output peak too low (likely NaN): {peak_v:.6}");
+        assert!(
+            peak_v > 1e-6,
+            "output peak too low (likely NaN): {peak_v:.6}"
+        );
         Ok(())
     }
 }

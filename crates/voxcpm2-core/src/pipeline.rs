@@ -59,9 +59,13 @@ pub struct SynthRequest {
     pub clone_strength: f64,
 }
 
-fn default_clone_strength() -> f64 { 1.0 }
+fn default_clone_strength() -> f64 {
+    1.0
+}
 
-fn default_t_scheduler() -> String { "uniform".into() }
+fn default_t_scheduler() -> String {
+    "uniform".into()
+}
 
 impl Default for SynthRequest {
     fn default() -> Self {
@@ -187,28 +191,28 @@ impl VoxPipeline {
             let dir = model_dir.unwrap_or_else(|| Path::new("models/VoxCPM2"));
             Some(VoxConfig::load(dir)?)
         };
-        Ok(Self { device, config, cache: None })
+        Ok(Self {
+            device,
+            config,
+            cache: None,
+        })
     }
 
     /// Ensure model cache is populated for the given model_dir.
     /// Reloads only if model_dir changed from the cached one.
     pub fn ensure_cache(&mut self, model_dir: &Path, need_encoder: bool) -> anyhow::Result<()> {
-        let should_reload = self
-            .cache
-            .as_ref()
-            .map_or(true, |c| c.model_dir != model_dir || (need_encoder && c.audiovae_all_tensors.is_none()));
+        let should_reload = self.cache.as_ref().map_or(true, |c| {
+            c.model_dir != model_dir || (need_encoder && c.audiovae_all_tensors.is_none())
+        });
         if should_reload {
-            eprintln!("  [cache] loading model weights from {}...", model_dir.display());
+            eprintln!(
+                "  [cache] loading model weights from {}...",
+                model_dir.display()
+            );
             let timer = std::time::Instant::now();
             self.cache = Some(ModelCache::load(model_dir, &self.device, need_encoder)?);
             // Also update self.config to match
-            self.config = Some(
-                self.cache
-                    .as_ref()
-                    .unwrap()
-                    .config
-                    .clone(),
-            );
+            self.config = Some(self.cache.as_ref().unwrap().config.clone());
             eprintln!("  [cache] loaded in {:.1}s", timer.elapsed().as_secs_f64());
         }
         Ok(())
@@ -272,8 +276,13 @@ impl VoxPipeline {
         if !req.dry_run {
             let polish = audio::polish_generated_speech(&mut samples, sample_rate);
             eprintln!(
-                "  [audio] polish: dc={:.6} peak_before={:.6} peak_after={:.6} headroom_gain={:.6}",
-                polish.dc_offset, polish.peak_before, polish.peak_after, polish.headroom_gain
+                "  [audio] polish: dc={:.6} peak_before={:.6} peak_after={:.6} headroom_gain={:.6} quiet_rms={:.6}->{:.6}",
+                polish.dc_offset,
+                polish.peak_before,
+                polish.peak_after,
+                polish.headroom_gain,
+                polish.quiet_rms_before,
+                polish.quiet_rms_after
             );
         }
 
@@ -318,7 +327,9 @@ impl VoxPipeline {
 
         // ── Access cached weights ──
         let cache = self.cache.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Model cache not populated — call ensure_cache() before synthesize_real")
+            anyhow::anyhow!(
+                "Model cache not populated — call ensure_cache() before synthesize_real"
+            )
         })?;
         let main_vb = cache.main_vb(dev);
         // AudioVAE — use CUDA device for AudioVAE if available
@@ -330,13 +341,10 @@ impl VoxPipeline {
         // Voice clone: use full audiovae tensors (encoder + decoder) from cache
         let is_clone = req.ref_audio_path.is_some();
         let audiovae_tensors = if is_clone {
-            cache
-                .audiovae_all_tensors
-                .clone()
-                .unwrap_or_else(|| {
-                    weights::load_audiovae_all_tensors(model_dir, audiovae_dev)
-                        .expect("failed to load audiovae encoder tensors fallback")
-                })
+            match &cache.audiovae_all_tensors {
+                Some(tensors) => tensors.clone(),
+                None => weights::load_audiovae_all_tensors(model_dir, audiovae_dev)?,
+            }
         } else {
             cache.audiovae_decoder_tensors.clone()
         };
@@ -379,7 +387,9 @@ impl VoxPipeline {
             let combined_seq_len = prefix.combined_ids.dim(1)?;
             let combined_ids = prefix.combined_ids.clone();
             clone_prefix = Some(prefix);
-            eprintln!("  [clone] ready: {n_patches} ref patches, combined_seq_len={combined_seq_len}");
+            eprintln!(
+                "  [clone] ready: {n_patches} ref patches, combined_seq_len={combined_seq_len}"
+            );
             combined_ids
         } else {
             Tensor::from_slice(&tokens, &[1, tokens.len()], dev)?.to_dtype(DType::I64)?
@@ -434,8 +444,17 @@ impl VoxPipeline {
 
         // ── Apply request-level scheduler override via cloned config ──
         let mut ar_config = config.clone();
-        if req.t_scheduler == "log-norm" || req.t_scheduler == "uniform" {
-            ar_config.dit_config.cfm_config.t_scheduler = req.t_scheduler.clone();
+        match req.t_scheduler.as_str() {
+            "log-norm" | "uniform" => {
+                ar_config.dit_config.cfm_config.t_scheduler = req.t_scheduler.clone();
+            }
+            _ => {
+                tracing::warn!(
+                    "Unknown t_scheduler '{}', using config default '{}'",
+                    req.t_scheduler,
+                    ar_config.dit_config.cfm_config.t_scheduler,
+                );
+            }
         }
         eprintln!(
             "  [pipe] CFM scheduler: {} (mean={:.1}, std={:.1})",
@@ -448,8 +467,14 @@ impl VoxPipeline {
         check_cancel("autoregressive")?;
         let latent = if let Some(prefix) = &clone_prefix {
             generate_autoregressive_clone(
-                &main_vb, &ar_config, req, dev, &prefix.combined_ids, cancel,
-                &prefix.combined_embeds, &prefix.feat_embeds,
+                &main_vb,
+                &ar_config,
+                req,
+                dev,
+                &prefix.combined_ids,
+                cancel,
+                &prefix.combined_embeds,
+                &prefix.feat_embeds,
             )?
         } else {
             generate_autoregressive(&main_vb, &ar_config, req, dev, &input_ids, cancel)?
@@ -477,12 +502,14 @@ impl VoxPipeline {
         // while preventing wide-channel OOD saturation of AudioVAE.
         // Use --latent-norm <scale> for pure global scaling.
         // Use --latent-norm 1.0 to disable.
-        const PYTHON_CH_STD_CAP: f64 = 1.6;  // cap per-channel std to this
+        const PYTHON_CH_STD_CAP: f64 = 1.6; // cap per-channel std to this
         const PYTHON_GLOBAL_STD: f64 = 1.26;
         const RUST_GLOBAL_STD: f64 = 1.60;
         const DEFAULT_GLOBAL_SCALE: f64 = PYTHON_GLOBAL_STD / RUST_GLOBAL_STD; // 0.7875
 
-        fn is_disabled(s: f64) -> bool { (s - 1.0).abs() < 1e-6 }
+        fn is_disabled(s: f64) -> bool {
+            (s - 1.0).abs() < 1e-6
+        }
 
         let latent_for_vae = match req.latent_norm_scale {
             None => {
@@ -492,10 +519,10 @@ impl VoxPipeline {
                 let (_b, c, _t) = latent_work.dims3()?;
 
                 // 1. Per-channel mean and std
-                let mean = latent_work.mean_keepdim(2)?;          // [1, c, 1]
-                let var = latent_work.var_keepdim(2)?;            // [1, c, 1]
+                let mean = latent_work.mean_keepdim(2)?; // [1, c, 1]
+                let var = latent_work.var_keepdim(2)?; // [1, c, 1]
                 let min_var = Tensor::full(1e-8f32, &[1, c, 1], dev)?;
-                let std_ch = var.maximum(&min_var)?.sqrt()?;      // [1, c, 1]
+                let std_ch = var.maximum(&min_var)?.sqrt()?; // [1, c, 1]
 
                 // 2. Cap per-channel std: for channels where std > cap,
                 //    scale them down so that max(std) = PYTHON_CH_STD_CAP.
@@ -504,14 +531,14 @@ impl VoxPipeline {
                 // scale_per_ch = min(1.0, cap / std)  => for each ch: if std > cap, std * (cap/std) = cap
                 // inv_ratio = min(1.0, cap / std) = cap / max(std, cap)
                 // We compute: safe_std = max(std, cap), then inv_ratio = cap / safe_std
-                let std_safe = std_ch.maximum(&cap_t)?;   // [1, c, 1]
+                let std_safe = std_ch.maximum(&cap_t)?; // [1, c, 1]
                 let inv_ratio = cap_t.broadcast_div(&std_safe)?; // [1, c, 1], in (0, 1]
 
                 // Apply per-channel scale: center and rescale
-                let centered = latent_work.broadcast_sub(&mean)?;  // [1, c, t]
-                let capped = centered.broadcast_mul(&inv_ratio)?;  // [1, c, t]
-                // Re-add mean (already near 0 for each channel)
-                let re_centered = capped.broadcast_add(&mean)?;    // [1, c, t]
+                let centered = latent_work.broadcast_sub(&mean)?; // [1, c, t]
+                let capped = centered.broadcast_mul(&inv_ratio)?; // [1, c, t]
+                                                                  // Re-add mean (already near 0 for each channel)
+                let re_centered = capped.broadcast_add(&mean)?; // [1, c, t]
 
                 // 3. Global soft-scale toward Python distribution
                 let scale_t = Tensor::full(DEFAULT_GLOBAL_SCALE as f32, &[1, 1, 1], dev)?;
@@ -524,7 +551,10 @@ impl VoxPipeline {
                 let avg_std: f32 = ch_stds.iter().sum::<f32>() / ch_stds.len() as f32;
                 let min_ch_std = ch_stds.iter().cloned().fold(f32::MAX, f32::min);
                 let max_ch_std = ch_stds.iter().cloned().fold(f32::MIN, f32::max);
-                let capped_chs = ch_stds.iter().filter(|&&s| s > PYTHON_CH_STD_CAP as f32).count();
+                let capped_chs = ch_stds
+                    .iter()
+                    .filter(|&&s| s > PYTHON_CH_STD_CAP as f32)
+                    .count();
                 eprintln!(
                     "  [pipe] latent_norm: var-cap({PYTHON_CH_STD_CAP})+scale({DEFAULT_GLOBAL_SCALE}) \
                      ch_stds: mean={avg_std:.4} range=[{min_ch_std:.4}, {max_ch_std:.4}] capped={capped_chs}/{c}"
@@ -538,8 +568,7 @@ impl VoxPipeline {
             Some(scale) => {
                 // Custom global scale (backward compat)
                 let dtype = latent.dtype();
-                let scale_t = Tensor::full(scale as f32, &[1, 1, 1], dev)?
-                    .to_dtype(dtype)?;
+                let scale_t = Tensor::full(scale as f32, &[1, 1, 1], dev)?.to_dtype(dtype)?;
                 let scaled = latent.broadcast_mul(&scale_t)?;
                 eprintln!("  [pipe] latent_norm: global scale={scale}");
                 scaled
@@ -548,7 +577,9 @@ impl VoxPipeline {
 
         // ── AudioVAE decode ──
         let vae = crate::models::AudioVAE::load(&audiovae_tensors, &config.audio_vae_config)?;
-        let latent_vae = latent_for_vae.to_device(audiovae_dev)?.to_dtype(DType::F32)?;
+        let latent_vae = latent_for_vae
+            .to_device(audiovae_dev)?
+            .to_dtype(DType::F32)?;
         eprintln!(
             "  [pipe] AudioVAE decode on device: {:?}",
             latent_vae.device()
@@ -653,8 +684,8 @@ pub fn encode_ref_prefix(
         );
         samples_16k.truncate(max_samples);
     }
-    let audio_t = Tensor::from_slice(&samples_16k, &[1, 1, samples_16k.len()], dev)?
-        .to_dtype(DType::F32)?;
+    let audio_t =
+        Tensor::from_slice(&samples_16k, &[1, 1, samples_16k.len()], dev)?.to_dtype(DType::F32)?;
     eprintln!(
         "  [clone] resampled to 16 kHz: {} samples ({:.2}s)",
         samples_16k.len(),
@@ -792,10 +823,9 @@ pub fn encode_ref_prefix(
     // text_embed = embed_tokens(combined_ids) * scale_emb
     // Convert to F32 to match mask/feat_embeds dtype (text_mask is F32).
     // The AR function will convert to model dtype (BF16) before TSLM prefill.
-    let combined_ids_t = Tensor::from_slice(&combined_ids, &[1, total_len], dev)?
-        .to_dtype(DType::I64)?;
-    let text_embed = tslm.embed_text(&combined_ids_t)?
-        .to_dtype(DType::F32)?; // [1, total_len, 2048] F32
+    let combined_ids_t =
+        Tensor::from_slice(&combined_ids, &[1, total_len], dev)?.to_dtype(DType::I64)?;
+    let text_embed = tslm.embed_text(&combined_ids_t)?.to_dtype(DType::F32)?; // [1, total_len, 2048] F32
 
     // combined = text_mask * text_embed + (1 - text_mask) * feat_embeds
     let audio_mask = (text_mask.ones_like()? - &text_mask)?;
@@ -804,9 +834,7 @@ pub fn encode_ref_prefix(
     let combined_embeds = text_part.add(&audio_part)?;
 
     let elapsed = end_time.elapsed();
-    eprintln!(
-        "  [clone] prefix ready: dims [1, {total_len}, 2048] in {elapsed:.2?}"
-    );
+    eprintln!("  [clone] prefix ready: dims [1, {total_len}, 2048] in {elapsed:.2?}");
 
     Ok(RefPrefixResult {
         combined_ids: combined_ids_t,

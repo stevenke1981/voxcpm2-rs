@@ -218,6 +218,11 @@
    - Step 0 mu_input cos_sim = 0.9999 ✅
    - Step 0 pred_feat cos_sim = 0.05 ❌（CFM noise RNG 不同，預期行為）
    - 結論：prefill 完美對齊，分歧始於 CFM noise（期望且可接受）
+- [x] 第三輪殘留雜音降低（2026-06-29）：
+   - 根因：CFG/latent_norm 修復後，12kHz 以上 hiss 已很低；剩餘可聽雜音主要來自 0-80Hz sub-bass rumble 與非語音低能量段底噪
+   - 改善：speech polish 新增 80Hz zero-phase high-pass 與 soft expander（threshold 0.006, floor gain 0.30）
+   - 同 seed/同句驗證：0-80Hz 能量 `1.3403% -> 0.1178%`，quiet RMS `0.00260 -> 0.00191`，near-clip 維持 `0`
+   - ASR 仍可辨識主句：「第三次集音修正測試／請確認人聲...」
 - [x] GPU 模型權重快取 — `ModelCache` struct 避免 `synthesize` 每次重新載入 4.6 GB 模型權重<br>
   實作：`pipeline.rs` 新增 `ModelCache` 結構（`main_tensors` Arc、`audiovae_decoder_tensors`、`audiovae_all_tensors`、`tokenizer`、`config`），`VoxPipeline::ensure_cache()` 按需載入，`encode_ref_prefix()` 可接收預先載入的 encoder tensors
 - [ ] 推理速度優化（目前 30 step AR + 30 CFM + AudioVAE CUDA 約 30-60s）— 權重快取僅改善 GUI 多次生成的耗時，單次仍受推理計算限制

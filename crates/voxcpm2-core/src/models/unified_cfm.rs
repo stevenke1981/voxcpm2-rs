@@ -50,6 +50,7 @@ fn uniform_sway_timesteps(n: usize, sway_coef: f64) -> Vec<f64> {
         .collect()
 }
 
+#[cfg(feature = "debug-tensors")]
 fn save_flat_tensor(t: &Tensor, prefix: &str) -> Result<()> {
     let flat = t.flatten_all()?.to_vec1::<f32>()?;
     let path = format!("{prefix}.f32");
@@ -73,8 +74,15 @@ pub struct UnifiedCFM {
 
 impl UnifiedCFM {
     pub fn new(
-        estimator: LocDiT, cfg_rate: f64, sigma_min: f64, solver: &str, feat_dim: usize,
-        mean_mode: bool, t_scheduler: &str, t_scheduler_mean: f64, t_scheduler_std: f64,
+        estimator: LocDiT,
+        cfg_rate: f64,
+        sigma_min: f64,
+        solver: &str,
+        feat_dim: usize,
+        mean_mode: bool,
+        t_scheduler: &str,
+        t_scheduler_mean: f64,
+        t_scheduler_std: f64,
     ) -> Self {
         let target_dtype = estimator.in_proj.weight().dtype();
         Self {
@@ -94,7 +102,12 @@ impl UnifiedCFM {
     /// Create a full tensor in the target dtype on the target device.
     /// On CUDA with non-F32 dtypes (BF16), creates on CPU first to avoid
     /// CUDA dtype conversion limitations in candle 0.9.2.
-    fn make_full<S: Into<candle_core::Shape>>(&self, value: f32, shape: S, _dev: &Device) -> Result<Tensor> {
+    fn make_full<S: Into<candle_core::Shape>>(
+        &self,
+        value: f32,
+        shape: S,
+        _dev: &Device,
+    ) -> Result<Tensor> {
         let shape = shape.into();
         if self.target_dtype == DType::F32 {
             Tensor::full(value, &shape, _dev)
@@ -106,7 +119,12 @@ impl UnifiedCFM {
     }
 
     /// Create a randn tensor in the target dtype on the target device.
-    fn make_randn<S: Into<candle_core::Shape>>(&self, shape: S, seed: Option<u64>, _dev: &Device) -> Result<Tensor> {
+    fn make_randn<S: Into<candle_core::Shape>>(
+        &self,
+        shape: S,
+        seed: Option<u64>,
+        _dev: &Device,
+    ) -> Result<Tensor> {
         let shape = shape.into();
         let cpu_t = match seed {
             Some(s) => {
@@ -213,7 +231,7 @@ impl UnifiedCFM {
         for step in 0..num_steps {
             // 取消檢查
             if let Some(flag) = cancel {
-                if flag.load(Ordering::SeqCst) {
+                if flag.load(Ordering::Relaxed) {
                     return Err(candle_core::Error::Msg(
                         "Synthesis cancelled by user".into(),
                     ));
@@ -239,11 +257,12 @@ impl UnifiedCFM {
                 // cond_in[:b], cond_in[b:] = cond, cond — line 115 of unified_cfm.py
                 let cond_2x = Tensor::cat(&[cond, cond], 0)?;
 
-                let full_pred = self.estimator.forward(
-                    &x_2x, &mu_2x, &t_2x, &cond_2x, &dt_2x,
-                )?; // [2*B, C, T]
+                let full_pred = self
+                    .estimator
+                    .forward(&x_2x, &mu_2x, &t_2x, &cond_2x, &dt_2x)?; // [2*B, C, T]
 
                 // Debug: save velocity prediction from first non-zero step
+                #[cfg(feature = "debug-tensors")]
                 if step == zero_init_steps {
                     let dbg_pred = full_pred.to_dtype(DType::F32)?;
                     save_flat_tensor(&dbg_pred, "output/debug_cfm_velocity")?;
@@ -268,13 +287,12 @@ impl UnifiedCFM {
                 //   dphi_dt = st_star * neg + cfg * (pos - st_star * neg)
                 // This adaptively scales the unconditional guidance direction
                 // to align with the conditional prediction (zero-star CFG).
-                let c_flat = pred_cond.reshape((batch, feat_dim * x_len))?;   // [B, C*T]
+                let c_flat = pred_cond.reshape((batch, feat_dim * x_len))?; // [B, C*T]
                 let u_flat = pred_uncond.reshape((batch, feat_dim * x_len))?;
-                let dot = (c_flat * &u_flat)?.sum_keepdim(1)?;                 // [B, 1]
-                let eps = self.make_full(1e-8f32, &[1, 1], &dev)?;            // [1, 1] epsilon
-                let norm_sq = (u_flat.sqr()?.sum_keepdim(1)? + &eps)?;         // [B, 1]
-                let st_star = dot.broadcast_div(&norm_sq)?
-                    .unsqueeze(2)?;                                            // [B, 1, 1] for [B, C, T] broadcast
+                let dot = (c_flat * &u_flat)?.sum_keepdim(1)?; // [B, 1]
+                let eps = self.make_full(1e-8f32, &[1, 1], &dev)?; // [1, 1] epsilon
+                let norm_sq = (u_flat.sqr()?.sum_keepdim(1)? + &eps)?; // [B, 1]
+                let st_star = dot.broadcast_div(&norm_sq)?.unsqueeze(2)?; // [B, 1, 1] for [B, C, T] broadcast
 
                 // dphi_dt = st_star * uncond + cfg * (cond - st_star * uncond)
                 let neg_scaled = st_star.broadcast_mul(&pred_uncond)?;

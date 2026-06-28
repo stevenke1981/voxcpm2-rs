@@ -2,6 +2,12 @@ use std::path::Path;
 
 /// Lowpass cutoff for hiss reduction (12kHz, preserves full speech band).
 const SPEECH_LOWPASS_HZ: f32 = 12_000.0;
+/// Highpass cutoff for sub-bass rumble from imperfect CFM latents.
+const SPEECH_HIGHPASS_HZ: f32 = 80.0;
+const EXPANDER_THRESHOLD: f32 = 0.006;
+const EXPANDER_FLOOR_GAIN: f32 = 0.30;
+const EXPANDER_ATTACK_MS: f32 = 8.0;
+const EXPANDER_RELEASE_MS: f32 = 120.0;
 
 const FADE_IN_MS: f32 = 5.0;
 const FADE_OUT_MS: f32 = 12.0;
@@ -13,25 +19,27 @@ pub struct AudioPolishReport {
     pub peak_before: f32,
     pub peak_after: f32,
     pub headroom_gain: f32,
+    pub quiet_rms_before: f32,
+    pub quiet_rms_after: f32,
 }
 
 /// Load a mono WAV file and return (samples, sample_rate).
 /// Supports 16-bit PCM (most common). Other formats may fail.
 pub fn load_wav_mono(path: impl AsRef<Path>) -> anyhow::Result<(Vec<f32>, u32)> {
-    let mut reader = hound::WavReader::open(path.as_ref())
-        .map_err(|e| anyhow::anyhow!("open WAV: {e}"))?;
+    let mut reader =
+        hound::WavReader::open(path.as_ref()).map_err(|e| anyhow::anyhow!("open WAV: {e}"))?;
     let spec = reader.spec();
     let sample_rate = spec.sample_rate;
 
     let samples: Vec<f32> = match (spec.channels, spec.bits_per_sample, spec.sample_format) {
-        (1, 16, hound::SampleFormat::Int) => {
-            reader.samples::<i16>()
-                .map(|s| s.unwrap_or(0) as f32 / i16::MAX as f32)
-                .collect()
-        }
+        (1, 16, hound::SampleFormat::Int) => reader
+            .samples::<i16>()
+            .map(|s| s.unwrap_or(0) as f32 / i16::MAX as f32)
+            .collect(),
         (2, 16, hound::SampleFormat::Int) => {
             // Downmix stereo to mono
-            let stereo: Vec<f32> = reader.samples::<i16>()
+            let stereo: Vec<f32> = reader
+                .samples::<i16>()
                 .map(|s| s.unwrap_or(0) as f32 / i16::MAX as f32)
                 .collect();
             stereo.chunks(2).map(|ch| (ch[0] + ch[1]) * 0.5).collect()
@@ -100,13 +108,16 @@ pub fn polish_generated_speech(samples: &mut [f32], sample_rate: u32) -> AudioPo
     }
 
     let peak_before = peak(samples);
+    let quiet_rms_before = quiet_rms(samples, sample_rate);
     let dc_offset = samples.iter().sum::<f32>() / samples.len() as f32;
     for sample in samples.iter_mut() {
         *sample -= dc_offset;
     }
 
-    // Low-pass to remove hiss/ultrasonic residuals (12kHz, zero-phase)
+    // Remove residual CFM/AudiVAE rumble and hiss while preserving speech.
+    apply_one_pole_highpass_zero_phase(samples, sample_rate, SPEECH_HIGHPASS_HZ);
     apply_one_pole_lowpass_zero_phase(samples, sample_rate, SPEECH_LOWPASS_HZ);
+    apply_soft_expander(samples, sample_rate);
     apply_edge_fades(samples, sample_rate, FADE_IN_MS, FADE_OUT_MS);
 
     let peak_after_filter = peak(samples);
@@ -126,6 +137,8 @@ pub fn polish_generated_speech(samples: &mut [f32], sample_rate: u32) -> AudioPo
         peak_before,
         peak_after: peak(samples),
         headroom_gain,
+        quiet_rms_before,
+        quiet_rms_after: quiet_rms(samples, sample_rate),
     }
 }
 
@@ -176,6 +189,17 @@ fn apply_one_pole_lowpass_zero_phase(samples: &mut [f32], sample_rate: u32, cuto
     samples.reverse();
 }
 
+fn apply_one_pole_highpass_zero_phase(samples: &mut [f32], sample_rate: u32, cutoff_hz: f32) {
+    if samples.len() < 2 || sample_rate == 0 || cutoff_hz <= 0.0 {
+        return;
+    }
+    let mut low = samples.to_vec();
+    apply_one_pole_lowpass_zero_phase(&mut low, sample_rate, cutoff_hz);
+    for (sample, low_sample) in samples.iter_mut().zip(low) {
+        *sample -= low_sample;
+    }
+}
+
 fn lowpass_pass(samples: &mut [f32], alpha: f32) {
     let mut y = samples[0];
     for sample in samples.iter_mut().skip(1) {
@@ -184,7 +208,54 @@ fn lowpass_pass(samples: &mut [f32], alpha: f32) {
     }
 }
 
+fn apply_soft_expander(samples: &mut [f32], sample_rate: u32) {
+    if samples.is_empty() || sample_rate == 0 {
+        return;
+    }
+    let attack = smoothing_coeff(EXPANDER_ATTACK_MS, sample_rate);
+    let release = smoothing_coeff(EXPANDER_RELEASE_MS, sample_rate);
+    let mut env = 0.0f32;
+    for sample in samples.iter_mut() {
+        let level = sample.abs();
+        let coeff = if level > env { attack } else { release };
+        env = coeff.mul_add(env, (1.0 - coeff) * level);
+        let gain = if env >= EXPANDER_THRESHOLD {
+            1.0
+        } else {
+            let openness = (env / EXPANDER_THRESHOLD).clamp(0.0, 1.0);
+            EXPANDER_FLOOR_GAIN + (1.0 - EXPANDER_FLOOR_GAIN) * openness
+        };
+        *sample *= gain;
+    }
+}
 
+fn smoothing_coeff(ms: f32, sample_rate: u32) -> f32 {
+    let samples = (ms.max(0.1) * sample_rate as f32 / 1000.0).max(1.0);
+    (-1.0 / samples).exp()
+}
+
+fn quiet_rms(samples: &[f32], sample_rate: u32) -> f32 {
+    if samples.is_empty() || sample_rate == 0 {
+        return 0.0;
+    }
+    let frame = (sample_rate as usize / 50).max(1);
+    let frames = samples.len() / frame;
+    if frames == 0 {
+        return rms(samples);
+    }
+    let mut rms_values: Vec<f32> = (0..frames)
+        .map(|i| rms(&samples[i * frame..(i + 1) * frame]))
+        .collect();
+    rms_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    rms_values[(rms_values.len() / 10).min(rms_values.len() - 1)]
+}
+
+fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+}
 
 fn apply_edge_fades(samples: &mut [f32], sample_rate: u32, fade_in_ms: f32, fade_out_ms: f32) {
     if samples.is_empty() || sample_rate == 0 {
@@ -258,6 +329,40 @@ mod tests {
         assert!(hiss_ratio < 0.60, "18kHz hiss should be attenuated");
     }
 
+    #[test]
+    fn highpass_reduces_rumble_more_than_voice_band() {
+        let sample_rate = 48_000;
+        let len = sample_rate as usize / 5;
+        let mut voice = sine(len, sample_rate, 1_000.0);
+        let mut rumble = sine(len, sample_rate, 30.0);
+        let voice_before = rms(&voice);
+        let rumble_before = rms(&rumble);
+
+        apply_one_pole_highpass_zero_phase(&mut voice, sample_rate, SPEECH_HIGHPASS_HZ);
+        apply_one_pole_highpass_zero_phase(&mut rumble, sample_rate, SPEECH_HIGHPASS_HZ);
+
+        let voice_ratio = rms(&voice) / voice_before;
+        let rumble_ratio = rms(&rumble) / rumble_before;
+        assert!(voice_ratio > 0.95, "voice band should be mostly preserved");
+        assert!(rumble_ratio < 0.35, "30Hz rumble should be attenuated");
+    }
+
+    #[test]
+    fn soft_expander_reduces_quiet_noise_and_preserves_loud_speech() {
+        let sample_rate = 48_000;
+        let mut samples = vec![0.002; sample_rate as usize / 10];
+        samples.extend(vec![0.04; sample_rate as usize / 10]);
+
+        let quiet_before = rms(&samples[..sample_rate as usize / 10]);
+        let loud_before = rms(&samples[sample_rate as usize / 10..]);
+        apply_soft_expander(&mut samples, sample_rate);
+        let quiet_after = rms(&samples[..sample_rate as usize / 10]);
+        let loud_after = rms(&samples[sample_rate as usize / 10..]);
+
+        assert!(quiet_after < quiet_before * 0.75);
+        assert!(loud_after > loud_before * 0.90);
+    }
+
     fn sine(len: usize, sample_rate: u32, hz: f32) -> Vec<f32> {
         (0..len)
             .map(|i| {
@@ -265,9 +370,5 @@ mod tests {
                 (2.0 * std::f32::consts::PI * hz * t).sin()
             })
             .collect()
-    }
-
-    fn rms(samples: &[f32]) -> f32 {
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
     }
 }

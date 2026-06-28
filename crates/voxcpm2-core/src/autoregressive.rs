@@ -80,8 +80,14 @@ pub fn generate_autoregressive_clone(
     init_feat_embeds: &Tensor,
 ) -> anyhow::Result<Tensor> {
     generate_autoregressive_with(
-        main_vb, config, req, dev, input_ids, cancel,
-        Some(init_combined_embeds), Some(init_feat_embeds),
+        main_vb,
+        config,
+        req,
+        dev,
+        input_ids,
+        cancel,
+        Some(init_combined_embeds),
+        Some(init_feat_embeds),
     )
 }
 
@@ -186,8 +192,15 @@ fn generate_autoregressive_with(
     let t_scheduler_mean = config.dit_config.cfm_config.t_scheduler_mean;
     let t_scheduler_std = config.dit_config.cfm_config.t_scheduler_std;
     let mut cfm = UnifiedCFM::new(
-        dit, cfg_rate, sigma_min, solver, feat_dim, mean_mode,
-        t_scheduler, t_scheduler_mean, t_scheduler_std,
+        dit,
+        cfg_rate,
+        sigma_min,
+        solver,
+        feat_dim,
+        mean_mode,
+        t_scheduler,
+        t_scheduler_mean,
+        t_scheduler_std,
     );
     let lm_to_dit = candle_nn::linear(
         2048,
@@ -350,7 +363,8 @@ fn save_debug_tensor(t: &Tensor, name: &str) -> candle_core::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::should_check_stop;
+    use super::*;
+    use candle_core::{Device, Tensor};
 
     #[test]
     fn stop_gate_matches_python_min_len_rule() {
@@ -359,5 +373,24 @@ mod tests {
         assert!(!should_check_stop(1, min_steps));
         assert!(!should_check_stop(2, min_steps));
         assert!(should_check_stop(3, min_steps));
+    }
+
+    #[test]
+    fn last_hidden_extracts_final_position() -> candle_core::Result<()> {
+        let dev = Device::Cpu;
+        // [B, T, C] = [1, 5, 2048]
+        let h = Tensor::randn(0.0f32, 1.0, &[1, 5, 2048], &dev)?;
+        let last = last_hidden(&h)?;
+        // Should be [1, 1, 2048]
+        assert_eq!(
+            last.dims(),
+            &[1, 1, 2048],
+            "last_hidden should extract last position"
+        );
+        // Verify value matches h[:, -1:, :]
+        let h_last = h.narrow(1, 4, 1)?;
+        let diff = (last - h_last)?.abs()?.sum_all()?.to_scalar::<f32>()?;
+        assert!(diff < 1e-5, "last_hidden value mismatch");
+        Ok(())
     }
 }
