@@ -65,6 +65,7 @@
 - [ ] device auto detect。
 - [ ] benchmark table：CPU / CUDA / Metal。
 - [ ] VRAM/RAM 估算與錯誤提示。
+- [x] 修正 GPU 語音不清楚主因：自回歸 loop 的初始 RALM prefill 與每步 FSQ 回寫對齊官方 Python `_inference()`。
 
 ## Milestone I：egui
 

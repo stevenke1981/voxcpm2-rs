@@ -33,6 +33,11 @@ fn last_hidden(h: &Tensor) -> candle_core::Result<Tensor> {
     h.narrow(1, t - 1, 1)
 }
 
+fn should_check_stop(step: usize, min_steps: usize) -> bool {
+    // Python: `if i > min_len and stop_flag == 1`.
+    step > min_steps
+}
+
 /// 完整自回歸生成迴圈。
 ///
 /// # Args
@@ -63,8 +68,9 @@ pub fn generate_autoregressive(
     };
     check_cancel("autoregressive-setup")?;
 
-    let feat_dim = config.feat_dim;          // 64
-    let patch_size = config.patch_size;      // 4
+    let feat_dim = config.feat_dim; // 64
+    let patch_size = config.patch_size; // 4
+
     // Dynamic max_len matching Python:
     //   max_len = min(text_tokens * retry_badcase_ratio_threshold + 10, global_max)
     // where retry_badcase_ratio_threshold = 6 (Python default), global_max = req.max_autoregressive_steps or 2000
@@ -76,7 +82,11 @@ pub fn generate_autoregressive(
     // ── 載入 KV cache 版本的 TSLM ──
     let mut tslm_kv = TSLM::load(&main_vb.pp("base_lm"), &config.lm_config, dev, true)?;
     let h_lm_init = tslm_kv.forward(input_ids, 0)?; // [B, T, 2048], 同時填充 KV cache
-    eprintln!("  [autoregressive] TSLM init: seq_len={seq_len} h_lm_init.shape={:?} peak={:.6}", h_lm_init.shape(), tensor_peak(&h_lm_init)?);
+    eprintln!(
+        "  [autoregressive] TSLM init: seq_len={seq_len} h_lm_init.shape={:?} peak={:.6}",
+        h_lm_init.shape(),
+        tensor_peak(&h_lm_init)?
+    );
     // Save TSLM output for comparison
     save_debug_tensor(&h_lm_init, "debug_tslm_init")?;
     check_cancel("autoregressive-tslm-init")?;
@@ -84,25 +94,37 @@ pub fn generate_autoregressive(
     // ── 載入 KV cache 版本的 RALM ──
     let ralm_num_layers = config.residual_lm_num_layers;
     let mut ralm_kv = RALM::load(
-        &main_vb.pp("residual_lm"), &config.lm_config, ralm_num_layers, dev, true,
+        &main_vb.pp("residual_lm"),
+        &config.lm_config,
+        ralm_num_layers,
+        dev,
+        true,
     )?;
-    let h_res_init = ralm_kv.forward(&h_lm_init, 0)?; // [B, T, 2048], 同時填充 KV cache
-    eprintln!("  [autoregressive] RALM init: peak={:.6}", tensor_peak(&h_res_init)?);
-    // Save RALM output for comparison
-    save_debug_tensor(&h_res_init, "debug_ralm_init")?;
-    check_cancel("autoregressive-ralm-init")?;
 
     // ── 載入其他組件 ──
-    let enc_rope_factors: Option<Vec<f64>> = config.lm_config.rope_scaling.as_ref().map(|rs| rs.short_factor.clone());
+    let enc_rope_factors: Option<Vec<f64>> = config
+        .lm_config
+        .rope_scaling
+        .as_ref()
+        .map(|rs| rs.short_factor.clone());
     let mut feat_enc = LocEnc::load(
-        &main_vb, &config.encoder_config, feat_dim, patch_size,
+        &main_vb,
+        &config.encoder_config,
+        feat_dim,
+        patch_size,
         enc_rope_factors.as_deref(),
     )?;
     let fsq = FsqLayer::load(main_vb)?;
     let stop = StopHead::load(main_vb)?;
-    let dit_rope_factors: Option<Vec<f64>> = config.lm_config.rope_scaling.as_ref().map(|rs| rs.short_factor.clone());
+    let dit_rope_factors: Option<Vec<f64>> = config
+        .lm_config
+        .rope_scaling
+        .as_ref()
+        .map(|rs| rs.short_factor.clone());
     let dit = LocDiT::load(
-        &main_vb.pp("feat_decoder"), &config.dit_config, feat_dim,
+        &main_vb.pp("feat_decoder"),
+        &config.dit_config,
+        feat_dim,
         dit_rope_factors.as_deref(),
     )?;
     let cfg_rate = config.dit_config.cfm_config.inference_cfg_rate;
@@ -110,9 +132,29 @@ pub fn generate_autoregressive(
     let solver = &config.dit_config.cfm_config.solver;
     let mean_mode = config.dit_config.mean_mode;
     let mut cfm = UnifiedCFM::new(dit, cfg_rate, sigma_min, solver, feat_dim, mean_mode);
-    let lm_to_dit = candle_nn::linear(2048, config.dit_config.hidden_dim, main_vb.pp("lm_to_dit_proj"))?;
-    let res_to_dit = candle_nn::linear(2048, config.dit_config.hidden_dim, main_vb.pp("res_to_dit_proj"))?;
-    let fusion_concat_proj = candle_nn::linear_no_bias(4096, 2048, main_vb.pp("fusion_concat_proj"))?;
+    let lm_to_dit = candle_nn::linear(
+        2048,
+        config.dit_config.hidden_dim,
+        main_vb.pp("lm_to_dit_proj"),
+    )?;
+    let res_to_dit = candle_nn::linear(
+        2048,
+        config.dit_config.hidden_dim,
+        main_vb.pp("res_to_dit_proj"),
+    )?;
+    let fusion_concat_proj =
+        candle_nn::linear_no_bias(4096, 2048, main_vb.pp("fusion_concat_proj"))?;
+
+    // Python zero-shot prefill:
+    //   residual_enc_inputs = fusion_concat_proj(cat((enc_outputs, feat_mask * feat_embed), dim=-1))
+    // With all-text zero-shot input, feat_mask is false for every token, so the second half is zeros.
+    let residual_zero = Tensor::zeros(
+        &[h_lm_init.dim(0)?, h_lm_init.dim(1)?, h_lm_init.dim(2)?],
+        h_lm_init.dtype(),
+        dev,
+    )?;
+    let residual_prefill = Tensor::cat(&[&h_lm_init, &residual_zero], 2)?;
+    let residual_prefill = fusion_concat_proj.forward(&residual_prefill)?;
 
     // ── 自回歸迴圈 ──
     let mut all_feats: Vec<Tensor> = Vec::new();
@@ -122,14 +164,21 @@ pub fn generate_autoregressive(
     let cfg_value = req.cfg_value;
 
     // h_lm 和 h_res 追蹤最後一個位置的 hidden state
-    let mut h_lm = last_hidden(&h_lm_init)?;   // [B, 1, 2048]
+    let mut h_lm = last_hidden(&h_lm_init)?; // [B, 1, 2048]
+    let h_res_init = ralm_kv.forward(&residual_prefill, 0)?; // fills RALM KV cache with Python-matching prefill
+    eprintln!(
+        "  [autoregressive] RALM init: peak={:.6}",
+        tensor_peak(&h_res_init)?
+    );
+    save_debug_tensor(&h_res_init, "debug_ralm_init")?;
+    check_cancel("autoregressive-ralm-init")?;
     let mut h_res = last_hidden(&h_res_init)?; // [B, 1, 2048]
 
     for step in 0..max_len {
         if step % 10 == 0 {
             eprintln!("  [autoregressive] step {step}/{max_len}");
         }
-                check_cancel(&format!("ar-step-{step}"))?;
+        check_cancel(&format!("ar-step-{step}"))?;
 
         // Save h_lm and h_res before each step for debugging
         save_debug_tensor(&h_lm, &format!("debug_step{step}_hlm_before"))?;
@@ -137,11 +186,8 @@ pub fn generate_autoregressive(
 
         // a. lm_to_dit_proj(lm_hidden) + res_to_dit_proj(residual_hidden) → dit_hidden [B, 2048]
         //    lm_to_dit: [1024, 2048] 投影 2048→1024;  concat 兩個 → [B, 1, 2048] → squeeze → [B, 2048]
-        let mu_input = Tensor::cat(
-            &[lm_to_dit.forward(&h_lm)?, res_to_dit.forward(&h_res)?],
-            2,
-        )?; // [B, 1, 2048]
-        let mu_input = mu_input.squeeze(1)?;      // [B, 2048]
+        let mu_input = Tensor::cat(&[lm_to_dit.forward(&h_lm)?, res_to_dit.forward(&h_res)?], 2)?; // [B, 1, 2048]
+        let mu_input = mu_input.squeeze(1)?; // [B, 2048]
 
         // b. UnifiedCFM → pred_feat [B, feat_dim, patch_size]
         // Use the model's target dtype (BF16 on CUDA, F32 on CPU) for the initial cond.
@@ -155,7 +201,14 @@ pub fn generate_autoregressive(
         // Save mu_input for debugging
         save_debug_tensor(&mu_input, &format!("debug_step{step}_mu_input"))?;
 
-        let pred_feat = cfm.forward(&mu_input, n_timesteps, patch_size, &cond, cfg_value as f64, cancel)?;
+        let pred_feat = cfm.forward(
+            &mu_input,
+            n_timesteps,
+            patch_size,
+            &cond,
+            cfg_value as f64,
+            cancel,
+        )?;
         // pred_feat: [B, feat_dim, patch_size] = [1, 64, 4]
         // Save pred_feat for debugging
         save_debug_tensor(&pred_feat, &format!("debug_step{step}_pred_feat"))?;
@@ -169,12 +222,12 @@ pub fn generate_autoregressive(
         all_feats.push(pred_feat.clone());
 
         // c. feat_encoder(音頻特徵) → curr_embed [B, 1, 2048]
-        let curr_embed = feat_enc.encode(&pred_feat)?; // [B, 1, 2048]
-        // Debug: save curr_embed stats
+        let curr_embed = feat_enc.encode(&pred_feat)?;
+        // Debug: save curr_embed stats.
         save_debug_tensor(&curr_embed, &format!("debug_step{step}_currembed"))?;
 
         // d. stop_head check
-        if step >= min_steps {
+        if should_check_stop(step, min_steps) {
             let logits = stop.forward(&h_lm)?;
             if stop.should_stop(&logits)? {
                 eprintln!("  [autoregressive] stop_head triggered at step {step}");
@@ -184,14 +237,15 @@ pub fn generate_autoregressive(
 
         // e. TSLM.forward_step(curr_embed) → lm_hidden [B, 1, 2048]
         let lm_out = tslm_kv.forward_step(&curr_embed, seq_len + step)?;
-        h_lm = lm_out;
 
         // f. fsq_layer → lm_hidden_q
-        let lm_q = fsq.forward(&h_lm)?;
+        // Python assigns this back to `lm_hidden`, so the next DiT step and stop head
+        // both consume the quantized hidden state.
+        h_lm = fsq.forward(&lm_out)?;
 
         // g. fusion_concat_proj(concat(lm_hidden_q, curr_embed)) → [B, 1, 2048]
-        let fusion = Tensor::cat(&[&lm_q, &curr_embed], 2)?; // [B, 1, 4096]
-        let fusion = fusion_concat_proj.forward(&fusion)?;   // [B, 1, 2048]
+        let fusion = Tensor::cat(&[&h_lm, &curr_embed], 2)?; // [B, 1, 4096]
+        let fusion = fusion_concat_proj.forward(&fusion)?; // [B, 1, 2048]
 
         // h. RALM.forward_step(fusion) → residual_hidden [B, 1, 2048]
         h_res = ralm_kv.forward_step(&fusion, seq_len + step)?;
@@ -207,7 +261,10 @@ pub fn generate_autoregressive(
 
     // 串接所有 patch → [B, feat_dim, total_frames]
     let total_frames: usize = all_feats.iter().map(|t| t.dim(2).unwrap()).sum();
-    eprintln!("  [autoregressive] generated {total_frames} frames across {} patches", all_feats.len());
+    eprintln!(
+        "  [autoregressive] generated {total_frames} frames across {} patches",
+        all_feats.len()
+    );
 
     let cat_inputs: Vec<&Tensor> = all_feats.iter().collect();
     let latent = Tensor::cat(&cat_inputs, 2)?; // [B, 64, total_frames]
@@ -226,7 +283,20 @@ fn save_debug_tensor(t: &Tensor, name: &str) -> candle_core::Result<()> {
     let path = format!("output/{name}.f32");
     let flat = t.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
     let bytes: Vec<u8> = flat.iter().flat_map(|v| v.to_le_bytes()).collect();
-    std::fs::write(&path, &bytes).map_err(|e| {
-        candle_core::Error::Msg(format!("save_debug_tensor({name}): {e}"))
-    })
+    std::fs::write(&path, &bytes)
+        .map_err(|e| candle_core::Error::Msg(format!("save_debug_tensor({name}): {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_check_stop;
+
+    #[test]
+    fn stop_gate_matches_python_min_len_rule() {
+        let min_steps = 2;
+        assert!(!should_check_stop(0, min_steps));
+        assert!(!should_check_stop(1, min_steps));
+        assert!(!should_check_stop(2, min_steps));
+        assert!(should_check_stop(3, min_steps));
+    }
 }

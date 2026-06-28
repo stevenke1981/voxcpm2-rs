@@ -173,6 +173,10 @@
 - [x] `max_len` 動態計算：`min(seq_len * 6 + 10, global_max)` 對齊 Python 行為，大幅減少無意義步驟
 - [x] `--max-ar-steps` CLI 參數：允許使用者控制 autoregressive 上限
 - [x] 移除 `device.rs` 中的備用測試函數（已確認 CUDA device 建立正常）
+- [x] 修正 GPU 語音不清楚的自回歸 parity bug（2026-06-28）：
+  - 初始 `residual_lm` prefill 改為 Python 對齊的 `fusion_concat_proj([enc_outputs, zeros])`，不再直接餵裸 `TSLM hidden`
+  - 每步 `TSLM.forward_step` 後將 `lm_hidden = fsq_layer(lm_hidden)` 回寫，讓下一輪 DiT/stop head 使用量化後 hidden
+  - stop gate 改為 Python 的 `i > min_len`，避免過早截斷
 - [ ] GPU 推理效能調校（目前 16 step AR + 5 CFM + AudioVAE CUDA 約 30-60s）
 
 ---
