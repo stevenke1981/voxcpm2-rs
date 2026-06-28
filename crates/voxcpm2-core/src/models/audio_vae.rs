@@ -73,14 +73,13 @@ fn load_conv_weight(
 
 /// Compute causal padding for a regular Conv1d (stride=1).
 /// Python `CausalConv1d` pads only the LEFT side:
-///   pad_len = (kernel - 1) * dilation / 2   (integer division)
-///   output_padding = max(0, stride - 1)    (Python: stride - 1 if stride > 1 else 0)
-///   left_pad = pad_len * 2 - output_padding
-/// For stride=1, output_padding=0: left pad = pad * 2, so conv output preserves width.
-fn causal_pad(x: &Tensor, kernel: usize, dilation: usize, stride: usize) -> Result<Tensor> {
-    let pad_len = dilation * (kernel - 1) / 2;
-    let output_padding = if stride > 1 { stride - 1 } else { 0 };
-    let left_pad = pad_len * 2 - output_padding;
+///   left_pad = (kernel - 1) * dilation
+///   F.pad(x, (left_pad, 0))    # left only
+/// This works for ALL strides (conv1d with padding=0 handles stride itself).
+/// Previous bug: for stride>1, the formula used `pad_len*2 - (stride-1)` which
+/// under-padded (e.g., k=4 s=2 → left_pad=1 instead of 3), corrupting latents.
+fn causal_pad(x: &Tensor, kernel: usize, dilation: usize, _stride: usize) -> Result<Tensor> {
+    let left_pad = (kernel - 1) * dilation;
     if left_pad == 0 {
         return Ok(x.clone());
     }
