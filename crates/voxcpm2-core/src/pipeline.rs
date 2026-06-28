@@ -276,14 +276,15 @@ impl VoxPipeline {
         if !req.dry_run {
             let polish = audio::polish_generated_speech(&mut samples, sample_rate);
             eprintln!(
-                "  [audio] polish: dc={:.6} peak_before={:.6} peak_after={:.6} headroom_gain={:.6} quiet_rms={:.6}->{:.6} bg_gate={:.6}",
+                "  [audio] polish: dc={:.6} peak_before={:.6} peak_after={:.6} headroom_gain={:.6} quiet_rms={:.6}->{:.6} bg_gate={:.6} harsh_frames={}",
                 polish.dc_offset,
                 polish.peak_before,
                 polish.peak_after,
                 polish.headroom_gain,
                 polish.quiet_rms_before,
                 polish.quiet_rms_after,
-                polish.background_gate_threshold
+                polish.background_gate_threshold,
+                polish.harsh_frames_smoothed
             );
         }
 
@@ -681,13 +682,14 @@ pub fn encode_ref_prefix(
     let mut samples_16k = audio::resample(&samples, src_rate, 16000);
     let ref_polish = audio::polish_clone_reference_audio(&mut samples_16k, 16000);
     eprintln!(
-        "  [clone] ref polish: dc={:.6} peak_before={:.6} peak_after={:.6} quiet_rms={:.6}->{:.6} bg_gate={:.6}",
+        "  [clone] ref polish: dc={:.6} peak_before={:.6} peak_after={:.6} quiet_rms={:.6}->{:.6} bg_gate={:.6} harsh_frames={}",
         ref_polish.dc_offset,
         ref_polish.peak_before,
         ref_polish.peak_after,
         ref_polish.quiet_rms_before,
         ref_polish.quiet_rms_after,
-        ref_polish.background_gate_threshold
+        ref_polish.background_gate_threshold,
+        ref_polish.harsh_frames_smoothed
     );
     // Auto-trim to MAX_REF_SECS to prevent CUDA OOM in AudioVAE encoder
     // (model.1 conv creates [1, 2048, T], ~23 GB for 178s audio).

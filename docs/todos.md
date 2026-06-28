@@ -70,6 +70,7 @@
 - [x] 降低殘留雜音：輸出前執行 DC removal、12kHz conservative low-pass、edge fade、0.95 headroom limiter，降低 hiss/click/near-clip。
 - [x] 第三輪殘留雜音降低：在 speech polish 加入 80Hz high-pass 與 soft expander，降低 sub-bass rumble 與非語音段底噪。
 - [x] 降低 synth/clone 背景底噪：輸出端加入 adaptive background gate；clone reference 在 AudioVAE encoder 前先清理，避免背景被寫入 speaker conditioning。
+- [x] 修正 Mandarin 中段刺耳雜音：針對 high-ZCR 4–8kHz broadband burst 加入局部 harsh midband smoother，保留 ASR 可辨識度。
 
 ## Milestone I：egui
 

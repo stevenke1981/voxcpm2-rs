@@ -105,3 +105,9 @@ VS 2022 Community 安裝於非預設路徑（`C:\Program Files\Microsoft Visual 
 **Trigger:** Synth and clone speech were intelligible, but both still had audible background noise.
 **Rule:** For residual background noise, measure frame-level quiet RMS and clean both stages: output WAV polish for synth/clone, and clone reference audio before AudioVAE encoding so reference noise is not baked into speaker conditioning.
 **Source:** synth and clone background noise pass
+
+---
+## Lesson #10 — 2026-06-29
+**Trigger:** A Mandarin sample still had audible noise in the middle even after background gating.
+**Rule:** If noise appears in the middle of a spoken phrase, inspect high-ZCR and 4-8kHz band energy before changing background gates; fricative-like broadband bursts need a local harsh-midband smoother, not more silence gating.
+**Source:** Mandarin mid-section noise pass

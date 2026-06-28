@@ -11,6 +11,11 @@ const EXPANDER_RELEASE_MS: f32 = 120.0;
 const BACKGROUND_GATE_FRAME_MS: f32 = 20.0;
 const BACKGROUND_GATE_FLOOR_GAIN: f32 = 0.12;
 const CLONE_REF_GATE_FLOOR_GAIN: f32 = 0.18;
+const HARSH_SMOOTHER_FRAME_MS: f32 = 20.0;
+const HARSH_SMOOTHER_LOWPASS_HZ: f32 = 4_500.0;
+const HARSH_ZCR_THRESHOLD: f32 = 0.11;
+const HARSH_RMS_THRESHOLD: f32 = 0.005;
+const HARSH_MAX_BLEND: f32 = 0.70;
 
 const FADE_IN_MS: f32 = 5.0;
 const FADE_OUT_MS: f32 = 12.0;
@@ -25,6 +30,7 @@ pub struct AudioPolishReport {
     pub quiet_rms_before: f32,
     pub quiet_rms_after: f32,
     pub background_gate_threshold: f32,
+    pub harsh_frames_smoothed: usize,
 }
 
 /// Load a mono WAV file and return (samples, sample_rate).
@@ -130,6 +136,7 @@ pub fn polish_generated_speech(samples: &mut [f32], sample_rate: u32) -> AudioPo
         0.0035,
         0.020,
     );
+    let harsh_frames_smoothed = apply_harsh_midband_smoother(samples, sample_rate);
     apply_edge_fades(samples, sample_rate, FADE_IN_MS, FADE_OUT_MS);
 
     let peak_after_filter = peak(samples);
@@ -152,6 +159,7 @@ pub fn polish_generated_speech(samples: &mut [f32], sample_rate: u32) -> AudioPo
         quiet_rms_before,
         quiet_rms_after: quiet_rms(samples, sample_rate),
         background_gate_threshold,
+        harsh_frames_smoothed,
     }
 }
 
@@ -181,6 +189,7 @@ pub fn polish_clone_reference_audio(samples: &mut [f32], sample_rate: u32) -> Au
         0.004,
         0.024,
     );
+    let harsh_frames_smoothed = apply_harsh_midband_smoother(samples, sample_rate);
     apply_edge_fades(samples, sample_rate, FADE_IN_MS, FADE_OUT_MS);
 
     let peak_after_filter = peak(samples);
@@ -203,6 +212,7 @@ pub fn polish_clone_reference_audio(samples: &mut [f32], sample_rate: u32) -> Au
         quiet_rms_before,
         quiet_rms_after: quiet_rms(samples, sample_rate),
         background_gate_threshold,
+        harsh_frames_smoothed,
     }
 }
 
@@ -351,6 +361,59 @@ fn apply_adaptive_background_gate(
     }
 
     threshold
+}
+
+fn apply_harsh_midband_smoother(samples: &mut [f32], sample_rate: u32) -> usize {
+    if samples.is_empty() || sample_rate == 0 {
+        return 0;
+    }
+
+    let mut softened = samples.to_vec();
+    apply_one_pole_lowpass_zero_phase(&mut softened, sample_rate, HARSH_SMOOTHER_LOWPASS_HZ);
+
+    let frame_len = ((sample_rate as f32 * HARSH_SMOOTHER_FRAME_MS) / 1000.0)
+        .round()
+        .max(1.0) as usize;
+    let frame_count = samples.len().div_ceil(frame_len);
+    let mut previous_blend = 0.0f32;
+    let mut smoothed_frames = 0usize;
+
+    for frame_idx in 0..frame_count {
+        let start = frame_idx * frame_len;
+        let end = (start + frame_len).min(samples.len());
+        let frame = &samples[start..end];
+        let frame_rms = rms(frame);
+        let zcr = zero_crossing_rate(frame);
+        let zcr_open = ((zcr - HARSH_ZCR_THRESHOLD) / 0.08).clamp(0.0, 1.0);
+        let rms_open = ((frame_rms - HARSH_RMS_THRESHOLD) / 0.015).clamp(0.0, 1.0);
+        let target_blend = (zcr_open * rms_open * HARSH_MAX_BLEND).clamp(0.0, HARSH_MAX_BLEND);
+
+        if target_blend > 0.01 {
+            smoothed_frames += 1;
+        }
+
+        let span = (end - start).max(1) as f32;
+        for i in 0..(end - start) {
+            let t = i as f32 / span;
+            let blend = previous_blend + (target_blend - previous_blend) * t;
+            let idx = start + i;
+            samples[idx] = samples[idx] * (1.0 - blend) + softened[idx] * blend;
+        }
+        previous_blend = target_blend;
+    }
+
+    smoothed_frames
+}
+
+fn zero_crossing_rate(samples: &[f32]) -> f32 {
+    if samples.len() < 2 {
+        return 0.0;
+    }
+    let crossings = samples
+        .windows(2)
+        .filter(|pair| pair[0].is_sign_negative() != pair[1].is_sign_negative())
+        .count();
+    crossings as f32 / (samples.len() - 1) as f32
 }
 
 fn smoothing_coeff(ms: f32, sample_rate: u32) -> f32 {
@@ -533,6 +596,41 @@ mod tests {
         assert!(report.background_gate_threshold > 0.0);
         assert!(report.quiet_rms_after < report.quiet_rms_before * 0.75);
         assert!(peak(&samples) <= PCM_HEADROOM + 1e-6);
+    }
+
+    #[test]
+    fn harsh_midband_smoother_softens_noisy_fricative_frames() {
+        let sample_rate = 48_000;
+        let len = sample_rate as usize / 10;
+        let mut samples: Vec<f32> = (0..len)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                let voice = (2.0 * std::f32::consts::PI * 900.0 * t).sin() * 0.025;
+                let harsh = if (i / 2) % 2 == 0 { 0.018 } else { -0.018 };
+                voice + harsh
+            })
+            .collect();
+        let mut softened_ref = samples.clone();
+        apply_one_pole_lowpass_zero_phase(
+            &mut softened_ref,
+            sample_rate,
+            HARSH_SMOOTHER_LOWPASS_HZ,
+        );
+        let diff_before = rms(&samples
+            .iter()
+            .zip(&softened_ref)
+            .map(|(a, b)| a - b)
+            .collect::<Vec<_>>());
+
+        let frames = apply_harsh_midband_smoother(&mut samples, sample_rate);
+        let diff_after = rms(&samples
+            .iter()
+            .zip(&softened_ref)
+            .map(|(a, b)| a - b)
+            .collect::<Vec<_>>());
+
+        assert!(frames > 0);
+        assert!(diff_after < diff_before * 0.75);
     }
 
     fn sine(len: usize, sample_rate: u32, hz: f32) -> Vec<f32> {

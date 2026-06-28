@@ -233,6 +233,10 @@
    - 改善：輸出端新增 20ms frame-based adaptive background gate；clone reference audio 在 16kHz encode 前先做 DC removal、80Hz high-pass、低通與 adaptive gate
    - Synth 驗證：`mandarin_asr_pass_seed99.wav -> mandarin_bg_gate_seed99.wav`，frame RMS q10 `0.00533 -> 0.00073`，ASR 仍為「你好 这是普通话语音测试」
    - Clone 驗證：`clone_fixed.wav -> clone_bg_gate_seed99.wav`，frame RMS q10 `0.02415 -> 0.00022`；reference quiet RMS `0.013710 -> 0.002763`；ASR 主句辨識為「这是普通话语音测试」
+- [x] Mandarin 中段刺耳雜音修正（2026-06-29）：
+   - 根因：`mandarin_bg_gate_seed99.wav` 中段約 `0.72–0.78s` 不是 12kHz hiss 或低頻 rumble，而是 high-ZCR、4–8kHz broadband/fricative burst；background gate 會把它當語音放過
+   - 改善：輸出 polish 新增 harsh midband smoother，只對 high-ZCR 且 RMS 足夠的 20ms frame 局部 blend 到 4.5kHz low-pass 版本
+   - 驗證：`mandarin_bg_gate_seed99.wav -> mandarin_mid_smooth_v2_seed99.wav`，0.76s RMS `0.02288 -> 0.01903`，0.78s RMS `0.01541 -> 0.01251`，ASR 仍為「你好 这是普通话语音测试」
 - [x] GPU 模型權重快取 — `ModelCache` struct 避免 `synthesize` 每次重新載入 4.6 GB 模型權重<br>
   實作：`pipeline.rs` 新增 `ModelCache` 結構（`main_tensors` Arc、`audiovae_decoder_tensors`、`audiovae_all_tensors`、`tokenizer`、`config`），`VoxPipeline::ensure_cache()` 按需載入，`encode_ref_prefix()` 可接收預先載入的 encoder tensors
 - [ ] 推理速度優化（目前 30 step AR + 30 CFM + AudioVAE CUDA 約 30-60s）— 權重快取僅改善 GUI 多次生成的耗時，單次仍受推理計算限制
