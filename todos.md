@@ -177,6 +177,11 @@
   - 初始 `residual_lm` prefill 改為 Python 對齊的 `fusion_concat_proj([enc_outputs, zeros])`，不再直接餵裸 `TSLM hidden`
   - 每步 `TSLM.forward_step` 後將 `lm_hidden = fsq_layer(lm_hidden)` 回寫，讓下一輪 DiT/stop head 使用量化後 hidden
   - stop gate 改為 Python 的 `i > min_len`，避免過早截斷
+- [x] 修正 zero-shot tokenization（2026-06-28）：
+  - Rust 舊版使用 chat template，ASR 辨識成「需要去一條／遇到新的…」
+  - 改為官方 Python zero-shot 格式：`text_tokenizer(target_text) + <|audio_start|>`，不加 BOS/EOS/chat tokens
+  - `voice_design` 改用官方 CLI 格式 `({control}){text}`
+  - 將預設 diffusion steps 提高到 30；ASR 從錯亂文字改善為「你好，这是修正后的语音确实,现在应该更清楚」
 - [ ] GPU 推理效能調校（目前 16 step AR + 5 CFM + AudioVAE CUDA 約 30-60s）
 
 ---

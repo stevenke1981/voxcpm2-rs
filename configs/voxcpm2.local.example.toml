@@ -1,7 +1,7 @@
 model_dir = "models/VoxCPM2"
 device = "auto"
 default_cfg = 2.0
-default_steps = 10
+default_steps = 30
 output_dir = "output"
 label_ai_generated = true
 

@@ -41,7 +41,7 @@ impl Default for SynthRequest {
             output_path: PathBuf::from("output/synth.wav"),
             device: "auto".into(),
             cfg_value: 2.0,
-            inference_timesteps: 10,
+            inference_timesteps: 30,
             dry_run: false,
             label_ai_generated: true,
             seed: None,
@@ -174,34 +174,33 @@ impl VoxPipeline {
         // ── Load all weights ──
         let main_vb = weights::load_main_vb(model_dir, dev)?;
         // AudioVAE — try CUDA first, fall back to CPU if cuBLAS conv1d errors
-        let audiovae_dev = if matches!(dev, Device::Cuda(_)) { dev } else { &Device::Cpu };
+        let audiovae_dev = if matches!(dev, Device::Cuda(_)) {
+            dev
+        } else {
+            &Device::Cpu
+        };
         let audiovae_tensors = weights::load_audiovae_decoder_tensors(model_dir, audiovae_dev)?;
 
         // ── Tokenizer ──
         let tokenizer = crate::tokenizer::VoxTokenizer::from_model_dir(model_dir)?;
-        // Apply chat template (matching Python: add_special_tokens=False, no BOS):
-        // <|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n
-        let chat_text = crate::tokenizer::render_chat_template(
-            &[crate::tokenizer::ChatMessage {
-                role: "user".into(),
-                content: req.text.clone(),
-            }],
-            true, // add_generation_prompt
-        );
-        let tokens = tokenizer.encode(&chat_text)?;
+        let target_text = build_voice_design_text(&req.text, req.voice_design.as_deref());
+        let tokens = tokenizer.encode_zero_shot(&target_text)?;
         if tokens.is_empty() {
             anyhow::bail!("tokenizer returned empty tokens");
         }
         let input_ids =
             Tensor::from_slice(&tokens, &[1, tokens.len()], dev)?.to_dtype(DType::I64)?;
         let seq_len = tokens.len();
-        let text_len = req.text.len();
+        let text_len = target_text.chars().count();
 
         // ── TSLM forward ──
         check_cancel("TSLM")?;
         let mut tslm = TSLM::load(&main_vb.pp("base_lm"), &config.lm_config, dev, false)?;
         let h_tslm = tslm.forward(&input_ids, 0)?; // [1, seq_len, 2048]
-        eprintln!("  [pipe] TSLM: seq_len={seq_len} text_len={text_len} h_tslm.shape={:?}", h_tslm.shape());
+        eprintln!(
+            "  [pipe] TSLM: seq_len={seq_len} text_len={text_len} h_tslm.shape={:?}",
+            h_tslm.shape()
+        );
         save_debug_tensor(&h_tslm, "debug_pipe_tslm")?;
         let (tslm_mean, tslm_std, tslm_peak) = tensor_stats(&h_tslm)?;
         eprintln!("  [pipe] TSLM: seq_len={seq_len} text_len={text_len} mean={tslm_mean:.6} std={tslm_std:.6} peak={tslm_peak:.6}");
@@ -210,8 +209,11 @@ impl VoxPipeline {
         check_cancel("RALM")?;
         let ralm_num_layers = config.residual_lm_num_layers;
         let mut ralm = RALM::load(
-            &main_vb.pp("residual_lm"), &config.lm_config,
-            ralm_num_layers, dev, false,
+            &main_vb.pp("residual_lm"),
+            &config.lm_config,
+            ralm_num_layers,
+            dev,
+            false,
         )?;
         let h_ralm = ralm.forward(&h_tslm, 0)?; // [1, seq_len, 2048]
         save_debug_tensor(&h_ralm, "debug_pipe_ralm")?;
@@ -225,15 +227,20 @@ impl VoxPipeline {
         let cond_text = (lm_to_dit.forward(&h_tslm)? + res_to_dit.forward(&h_ralm)?)?; // [1, seq_len, 1024]
         save_debug_tensor(&cond_text, "debug_pipe_cond_text")?;
         let (ct_mean, ct_std, ct_peak) = tensor_stats(&cond_text)?;
-        eprintln!("  [pipe] cond_text (lm+res→1024): mean={ct_mean:.6} std={ct_std:.6} peak={ct_peak:.6}");
+        eprintln!(
+            "  [pipe] cond_text (lm+res→1024): mean={ct_mean:.6} std={ct_std:.6} peak={ct_peak:.6}"
+        );
 
         // ── NEW: autoregressive generation ──
         check_cancel("autoregressive")?;
-        let latent = generate_autoregressive(
-            &main_vb, config, req, dev, &input_ids, cancel,
-        )?;
+        let latent = generate_autoregressive(&main_vb, config, req, dev, &input_ids, cancel)?;
         // latent shape: [1, feat_dim, seq_len]
-        let latent_peak = latent.abs()?.flatten_all()?.max(0)?.to_dtype(DType::F32)?.to_vec0::<f32>()?;
+        let latent_peak = latent
+            .abs()?
+            .flatten_all()?
+            .max(0)?
+            .to_dtype(DType::F32)?
+            .to_vec0::<f32>()?;
         if latent_peak < 0.001 {
             tracing::warn!("DiT latent very quiet (peak={:.6})", latent_peak);
         }
@@ -241,19 +248,27 @@ impl VoxPipeline {
         // ── AudioVAE decode ──
         let vae = crate::models::AudioVAE::load(&audiovae_tensors, &config.audio_vae_config)?;
         let latent_vae = latent.to_device(audiovae_dev)?.to_dtype(DType::F32)?;
-        eprintln!("  [pipe] AudioVAE decode on device: {:?}", latent_vae.device());
+        eprintln!(
+            "  [pipe] AudioVAE decode on device: {:?}",
+            latent_vae.device()
+        );
         {
             let latent_peak = tensor_peak(&latent_vae)?;
             let latent_stats = tensor_stats(&latent_vae)?;
-            eprintln!("  [pipe] AudioVAE latent: peak={:.6} mean={:.6} std={:.6}",
-                latent_peak, latent_stats.0, latent_stats.1);
+            eprintln!(
+                "  [pipe] AudioVAE latent: peak={:.6} mean={:.6} std={:.6}",
+                latent_peak, latent_stats.0, latent_stats.1
+            );
         }
         // Save latent for Python verification
         if let Ok(latent_f32) = latent_vae.squeeze(0) {
             let latent_flat = latent_f32.flatten_all()?.to_vec1::<f32>()?;
             let latent_bytes: Vec<u8> = latent_flat.iter().flat_map(|v| v.to_le_bytes()).collect();
             if std::fs::write("output/latent_rust.f32", &latent_bytes).is_ok() {
-                eprintln!("  [pipe] Saved latent to output/latent_rust.f32 ({} frames x 64 ch)", latent_vae.dim(1).unwrap_or(0));
+                eprintln!(
+                    "  [pipe] Saved latent to output/latent_rust.f32 ({} frames x 64 ch)",
+                    latent_vae.dim(1).unwrap_or(0)
+                );
             }
         }
         let waveform = vae.decode(&latent_vae)?;
@@ -262,6 +277,13 @@ impl VoxPipeline {
         // Flatten to Vec<f32>
         let vals = waveform.squeeze(0)?.squeeze(0)?.to_vec1::<f32>()?;
         Ok(vals)
+    }
+}
+
+fn build_voice_design_text(text: &str, voice_design: Option<&str>) -> String {
+    match voice_design.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(control) => format!("({control}){text}"),
+        None => text.to_string(),
     }
 }
 
@@ -301,6 +323,16 @@ mod tests {
     use super::*;
     use candle_core::DType;
 
+    #[test]
+    fn voice_design_text_matches_python_cli() {
+        assert_eq!(build_voice_design_text("Hello", None), "Hello");
+        assert_eq!(build_voice_design_text("Hello", Some("")), "Hello");
+        assert_eq!(
+            build_voice_design_text("Hello", Some(" warm female voice ")),
+            "(warm female voice)Hello"
+        );
+    }
+
     /// Verify the full pipeline shapes with real model weights.
     /// Prerequisites:
     ///   1. model.safetensors in models/VoxCPM2/
@@ -327,42 +359,50 @@ mod tests {
         let text = "Hello world.";
         let tokens = tokenizer.encode(text)?;
         assert!(!tokens.is_empty(), "tokenizer returned empty");
-        let input_ids = Tensor::from_slice(&tokens, &[1, tokens.len()], &dev)?.to_dtype(DType::I64)?;
+        let input_ids =
+            Tensor::from_slice(&tokens, &[1, tokens.len()], &dev)?.to_dtype(DType::I64)?;
         let seq_len = tokens.len();
         println!("Tokens: {tokens:?}");
 
         // ── TSLM forward (28 layers) ──
         let mut tslm = TSLM::load(&main_vb.pp("base_lm"), &config.lm_config, &dev, false)?;
         let h_tslm = tslm.forward(&input_ids, 0)?;
-        assert_eq!(h_tslm.dims(), &[1, seq_len, 2048],
-            "TSLM output shape");
+        assert_eq!(h_tslm.dims(), &[1, seq_len, 2048], "TSLM output shape");
         println!("TSLM forward OK: {:?}", h_tslm.shape());
 
         // ── RALM forward (8 layers) ──
         let mut ralm = RALM::load(
-            &main_vb.pp("residual_lm"), &config.lm_config,
-            config.residual_lm_num_layers, &dev, false,
+            &main_vb.pp("residual_lm"),
+            &config.lm_config,
+            config.residual_lm_num_layers,
+            &dev,
+            false,
         )?;
         let h_ralm = ralm.forward(&h_tslm, 0)?;
-        assert_eq!(h_ralm.dims(), &[1, seq_len, 2048],
-            "RALM output shape");
+        assert_eq!(h_ralm.dims(), &[1, seq_len, 2048], "RALM output shape");
         println!("RALM forward OK: {:?}", h_ralm.shape());
 
         // ── Text→DiT projection ──
         let (lm_to_dit, res_to_dit) = weights::load_text_to_dit_projections(&main_vb)?;
         let cond_text = (lm_to_dit.forward(&h_tslm)? + res_to_dit.forward(&h_ralm)?)?;
-        assert_eq!(cond_text.dims(), &[1, seq_len, 1024],
-            "cond_text shape");
+        assert_eq!(cond_text.dims(), &[1, seq_len, 1024], "cond_text shape");
         println!("Cond text OK: {:?}", cond_text.shape());
         // Debug cond_text stats
         let ct = cond_text.to_vec3::<f32>()?;
-        let mut vals: Vec<f32> = ct.iter().flat_map(|b| b.iter().flat_map(|t| t.iter())).copied().collect();
-        vals.sort_by(|a,b| a.partial_cmp(b).unwrap());
+        let mut vals: Vec<f32> = ct
+            .iter()
+            .flat_map(|b| b.iter().flat_map(|t| t.iter()))
+            .copied()
+            .collect();
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let n = vals.len();
         let ct_mean = vals.iter().sum::<f32>() / n as f32;
         let ct_std = (vals.iter().map(|v| (v - ct_mean).powi(2)).sum::<f32>() / n as f32).sqrt();
-        println!("  cond_text: mean={ct_mean:.6} std={ct_std:.6} p1={:.6} p99={:.6}",
-            vals[n/100], vals[99*n/100]);
+        println!(
+            "  cond_text: mean={ct_mean:.6} std={ct_std:.6} p1={:.6} p99={:.6}",
+            vals[n / 100],
+            vals[99 * n / 100]
+        );
 
         // ── LocDiT: diffusion generate ──
         // TODO(Z7): replace with autoregressive loop test
@@ -384,7 +424,11 @@ mod tests {
         println!("AudioVAE sanity check PASSED");
 
         // Check peak value
-        let peak_v = waveform.to_dtype(candle_core::DType::F32)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let peak_v = waveform
+            .to_dtype(candle_core::DType::F32)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
         println!("AudioVAE peak: {peak_v:.6}");
         if peak_v < 1e-4 {
             println!("WARNING: very quiet output (peak={peak_v:.6}), may need gain");
@@ -394,5 +438,3 @@ mod tests {
         Ok(())
     }
 }
-
-

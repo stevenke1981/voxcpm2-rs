@@ -61,7 +61,7 @@ impl Default for VoxApp {
                 text: "你好，這是 VoxCPM2 Rust Candle egui 測試。".into(),
                 output_path: "output/gui_synth.wav".into(),
                 cfg: 2.0,
-                steps: 10,
+                steps: 30,
                 ..Default::default()
             },
             clone_tab: CloneTab {
@@ -89,7 +89,8 @@ fn worker_loop(rx: Receiver<GuiCommand>, tx: Sender<GuiEvent>, cancel_flag: Arc<
             GuiCommand::Generate(req) => {
                 let result = (|| -> anyhow::Result<(PathBuf, Vec<f32>, u32)> {
                     let dry_run = req.dry_run;
-                    let mut pipe = VoxPipeline::new(&req.device, req.model_dir.as_deref(), dry_run)?;
+                    let mut pipe =
+                        VoxPipeline::new(&req.device, req.model_dir.as_deref(), dry_run)?;
                     let out = pipe.synthesize(&req, Some(&cancel_flag))?;
                     let sr = out.sample_rate;
 
@@ -183,7 +184,11 @@ impl eframe::App for VoxApp {
                     self.output_tab.ui(ui);
                 }
                 Tab::Diagnostics => {
-                    self.diagnostics_tab.ui(ui, &self.model_tab.model_dir, &self.model_tab.device_str);
+                    self.diagnostics_tab.ui(
+                        ui,
+                        &self.model_tab.model_dir,
+                        &self.model_tab.device_str,
+                    );
                 }
             }
         });

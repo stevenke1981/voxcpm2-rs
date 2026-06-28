@@ -209,6 +209,17 @@ impl VoxTokenizer {
         self.encode_with_special(&text)
     }
 
+    /// Encode official VoxCPM2 zero-shot/design text tokens.
+    ///
+    /// Python `VoxCPM2Model._generate()` uses:
+    /// `text_tokenizer(target_text)` followed by `<|audio_start|>`, with no BOS,
+    /// no EOS, and no chat template.
+    pub fn encode_zero_shot(&self, target_text: &str) -> anyhow::Result<Vec<u32>> {
+        let mut ids = self.encode(target_text)?;
+        ids.push(self.special.audio_start);
+        Ok(ids)
+    }
+
     /// Apply CJK split expansion to existing IDs.
     pub fn expand_cjk(&self, ids: &[u32]) -> Vec<u32> {
         let mut result = Vec::new();
@@ -373,6 +384,24 @@ mod tests {
         if let (Some(a), Some(b)) = (s.audio_prompt_start, s.audio_prompt_end) {
             assert_ne!(a, b);
         }
+    }
+
+    #[test]
+    #[ignore = "requires model weights"]
+    fn zero_shot_appends_audio_start_without_chat_or_bos() {
+        let dir = get_model_dir();
+        if !dir.join("tokenizer.json").exists() {
+            eprintln!("SKIP: missing tokenizer.json");
+            return;
+        }
+        let tok = VoxTokenizer::from_model_dir(&dir).unwrap();
+        let plain = tok.encode("你好").unwrap();
+        let ids = tok.encode_zero_shot("你好").unwrap();
+        assert_eq!(&ids[..plain.len()], plain.as_slice());
+        assert_eq!(ids.last(), Some(&tok.special.audio_start));
+        assert_ne!(ids.first(), Some(&tok.special.bos_token));
+        assert!(!ids.contains(&tok.special.im_start));
+        assert!(!ids.contains(&tok.special.im_end));
     }
 
     /// ── Parity test: compare Rust tokenizer output with Python golden ──

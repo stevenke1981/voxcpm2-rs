@@ -22,7 +22,7 @@ enum Command {
         device: String,
         #[arg(long, default_value_t = 2.0)]
         cfg: f32,
-        #[arg(long, default_value_t = 10)]
+        #[arg(long, default_value_t = 30)]
         steps: usize,
         #[arg(long)]
         max_ar_steps: Option<usize>,
