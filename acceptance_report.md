@@ -122,6 +122,30 @@ All 23 non-ignored unit tests pass on CPU.
 cargo build --features cuda
 ```
 
+### 效能改善：Model Weight Caching
+
+**Status: ✅ 已實作** (2026-06-29)
+
+| 改善 | 說明 | 影響 |
+|---|---|---|
+| ModelCache struct | 快取 `model.safetensors` (4.6 GB)、`audiovae.safetensors`、tokenizer、config | 避免每次 `synthesize` 呼叫重新從磁碟載入 4.6 GB 模型權重 |
+| `ensure_cache()` | 按需延遲載入，只在 `model_dir` 變更或有 clone encoder 需求時重新載入 | GUI 多次生成省去 ~60 s 載入時間 |
+| `encode_ref_prefix()` 接受快取 tensors | 可接收預先載入的 encoder tensors（`Option<&HashMap<String, Tensor>>`） | 減少 clone 路徑多餘的 `audiovae.safetensors` 載入 |
+
+### 已知限制
+
+1. CPU 推理非常慢（~4.6GB 模型權重，28層 TSLM + 8層 RALM）
+2. CUDA 需要 Visual Studio 2022 Community（或 Build Tools）提供 cl.exe
+3. 需先執行 `vcvars64.bat` 設定 MSVC INCLUDE/LIB 環境變數（NVCC_CCBIN 已自動設定）
+4. 生成的音訊在短文本 + 少步數時 peak 很低（需 post_gain 或更多步數）
+5. FeatEncoder vs LocEnc 有兩個獨立編碼器（FeatEncoder 死代碼，可清理）
+6. AudioVAE CUDA decode 速度仍需改善（~30s 含模型載入 + 16-step autoregressive + 960x upsampling）。權重快取消除了重複載入負擔，但單次推理仍受計算限制。
+7. Stop head 在短文本時可能不觸發（與 Python 行為一致，因 max_len 動態裁減使問題不明顯）
+8. 📌 CFM Box-Muller RNG 與 PyTorch `torch.randn` 天生不同——同 seed 會產生不同噪聲、不同軌跡
+9. 📌 Rust latent std (~1.60) 仍高於 Python (~1.26)，但 AudioVAE 解碼器能正常處理（model.7/model.8 峰值 12-16，在分布內）
+
+---
+
 ## 已修復的 Python 對齊問題
 
 | 修復 | Python | Rust (修復後) | 日期 |
@@ -135,14 +159,4 @@ cargo build --features cuda
 | **CFM seed propagation** | `torch.randn(seed=s)` | `StdRng` + Box-Muller with `seed: Option<u64>` | **2026-06-28** |
 | **🔴 CFM CFG uncond cond bug** | `cond_in[:b], cond_in[b:] = cond, cond` | `cond_2x = cat(&[cond, cond])` (🐛 原是用 zeros) | **2026-06-28** |
 
-## 已知限制
 
-1. CPU 推理非常慢（~4.6GB 模型權重，28層 TSLM + 8層 RALM）
-2. CUDA 需要 Visual Studio 2022 Community（或 Build Tools）提供 cl.exe
-3. 需先執行 `vcvars64.bat` 設定 MSVC INCLUDE/LIB 環境變數（NVCC_CCBIN 已自動設定）
-4. 生成的音訊在短文本 + 少步數時 peak 很低（需 post_gain 或更多步數）
-5. FeatEncoder vs LocEnc 有兩個獨立編碼器（FeatEncoder 死代碼，可清理）
-6. AudioVAE CUDA decode 速度仍需改善（~30s 含模型載入 + 16-step autoregressive + 960x upsampling）
-7. Stop head 在短文本時可能不觸發（與 Python 行為一致，因 max_len 動態裁減使問題不明顯）
-8. 📌 CFM Box-Muller RNG 與 PyTorch `torch.randn` 天生不同——同 seed 會產生不同噪聲、不同軌跡
-9. 📌 Rust latent std (~1.60) 仍高於 Python (~1.26)，但 AudioVAE 解碼器能正常處理（model.7/model.8 峰值 12-16，在分布內）

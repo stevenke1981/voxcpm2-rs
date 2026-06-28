@@ -49,6 +49,13 @@
 | D6 | `stop_head` weight shape `[2, 2048]` no bias | `linear_no_bias(2048, 2)` | ✅ 已對齊 |
 | D7 | `CausalConv1d`/`CausalTransposeConv1d` | Standard Conv1d/ConvTranspose1d with weight_norm fusion | Rust 使用 fused weight_norm |
 
+## 已實作的效能改善
+
+| Feature | Rust File | Status |
+|---|---|---|
+| Model weight caching (avoid 4.6GB reload per inference) | `pipeline.rs:ModelCache` + `ensure_cache()` | ✅ Caches main model, audiovae tensors, tokenizer, config across synthesize calls |
+| Pre-loaded encoder tensors for clone | `pipeline.rs:encode_ref_prefix()` accepts `Option<&HashMap<String, Tensor>>` | ✅ Avoids redundant `audiovae.safetensors` load for encoder during clone |
+
 ## 未實作的功能
 
 | Feature | Python File | Rust Status |

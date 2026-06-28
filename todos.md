@@ -218,7 +218,9 @@
    - Step 0 mu_input cos_sim = 0.9999 ✅
    - Step 0 pred_feat cos_sim = 0.05 ❌（CFM noise RNG 不同，預期行為）
    - 結論：prefill 完美對齊，分歧始於 CFM noise（期望且可接受）
-- [ ] GPU 推理效能調校（目前 30 step AR + 30 CFM + AudioVAE CUDA 約 30-60s）
+- [x] GPU 模型權重快取 — `ModelCache` struct 避免 `synthesize` 每次重新載入 4.6 GB 模型權重<br>
+  實作：`pipeline.rs` 新增 `ModelCache` 結構（`main_tensors` Arc、`audiovae_decoder_tensors`、`audiovae_all_tensors`、`tokenizer`、`config`），`VoxPipeline::ensure_cache()` 按需載入，`encode_ref_prefix()` 可接收預先載入的 encoder tensors
+- [ ] 推理速度優化（目前 30 step AR + 30 CFM + AudioVAE CUDA 約 30-60s）— 權重快取僅改善 GUI 多次生成的耗時，單次仍受推理計算限制
 
 ---
 

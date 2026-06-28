@@ -10,8 +10,10 @@ use crate::{
 use candle_core::{DType, Device, Module, Tensor};
 use candle_nn::VarBuilder;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SynthRequest {
@@ -94,9 +96,84 @@ pub struct SynthResult {
     pub dry_run: bool,
 }
 
+/// Cached model weights to avoid reloading from disk on every inference call.
+/// Created lazily and invalidated when model_dir changes.
+pub struct ModelCache {
+    /// The model directory this cache was loaded from.
+    pub model_dir: PathBuf,
+    /// Main VarBuilder tensors (model.safetensors, ~4.6 GB on CUDA).
+    pub main_tensors: Arc<HashMap<String, Tensor>>,
+    /// Default dtype for the main model.
+    pub main_default_dtype: DType,
+    /// AudioVAE decoder tensors (audiovae.safetensors, fused weight_norm).
+    pub audiovae_decoder_tensors: HashMap<String, Tensor>,
+    /// Full AudioVAE tensors (encoder + decoder). Loaded on demand for clone.
+    pub audiovae_all_tensors: Option<HashMap<String, Tensor>>,
+    /// Tokenizer.
+    pub tokenizer: VoxTokenizer,
+    /// VoxConfig loaded from model_dir.
+    pub config: VoxConfig,
+}
+
+impl ModelCache {
+    /// Load (or reload) all model weights from `model_dir`.
+    /// `need_encoder` — set to true when voice cloning is requested,
+    /// triggering AudioVAE encoder tensor loading.
+    pub fn load(model_dir: &Path, device: &Device, need_encoder: bool) -> anyhow::Result<Self> {
+        // ── Main model tensors (model.safetensors) ──
+        // Load once; convert BF16→F32 on CPU (same logic as weights::load_main_vb).
+        let use_bf16 = matches!(device, Device::Cuda(_));
+        let main_default_dtype = if use_bf16 { DType::BF16 } else { DType::F32 };
+        let raw_tensors =
+            candle_core::safetensors::load(&model_dir.join("model.safetensors"), device)?;
+        let main_tensors: HashMap<String, Tensor> = if use_bf16 {
+            raw_tensors
+        } else {
+            raw_tensors
+                .into_iter()
+                .map(|(k, t)| {
+                    let t = if t.dtype() == DType::BF16 {
+                        t.to_dtype(DType::F32).unwrap_or(t)
+                    } else {
+                        t
+                    };
+                    (k, t)
+                })
+                .collect()
+        };
+        let main_tensors = Arc::new(main_tensors);
+
+        let audiovae_decoder_tensors = weights::load_audiovae_decoder_tensors(model_dir, device)?;
+        let audiovae_all_tensors = if need_encoder {
+            Some(weights::load_audiovae_all_tensors(model_dir, device)?)
+        } else {
+            None
+        };
+        let tokenizer = VoxTokenizer::from_model_dir(model_dir)?;
+        let config = VoxConfig::load(model_dir)?;
+        Ok(Self {
+            model_dir: model_dir.to_path_buf(),
+            main_tensors,
+            main_default_dtype,
+            audiovae_decoder_tensors,
+            audiovae_all_tensors,
+            tokenizer,
+            config,
+        })
+    }
+
+    /// Create a fresh VarBuilder from cached tensors for the main model.
+    pub fn main_vb(&self, device: &Device) -> VarBuilder<'_> {
+        let tensors: HashMap<String, Tensor> = (*self.main_tensors).clone();
+        VarBuilder::from_tensors(tensors, self.main_default_dtype, device)
+    }
+}
+
 pub struct VoxPipeline {
     pub device: Device,
     pub config: Option<VoxConfig>,
+    /// Lazily cached model weights. Populated on first synthesize call.
+    pub cache: Option<ModelCache>,
 }
 
 impl VoxPipeline {
@@ -110,7 +187,31 @@ impl VoxPipeline {
             let dir = model_dir.unwrap_or_else(|| Path::new("models/VoxCPM2"));
             Some(VoxConfig::load(dir)?)
         };
-        Ok(Self { device, config })
+        Ok(Self { device, config, cache: None })
+    }
+
+    /// Ensure model cache is populated for the given model_dir.
+    /// Reloads only if model_dir changed from the cached one.
+    pub fn ensure_cache(&mut self, model_dir: &Path, need_encoder: bool) -> anyhow::Result<()> {
+        let should_reload = self
+            .cache
+            .as_ref()
+            .map_or(true, |c| c.model_dir != model_dir || (need_encoder && c.audiovae_all_tensors.is_none()));
+        if should_reload {
+            eprintln!("  [cache] loading model weights from {}...", model_dir.display());
+            let timer = std::time::Instant::now();
+            self.cache = Some(ModelCache::load(model_dir, &self.device, need_encoder)?);
+            // Also update self.config to match
+            self.config = Some(
+                self.cache
+                    .as_ref()
+                    .unwrap()
+                    .config
+                    .clone(),
+            );
+            eprintln!("  [cache] loaded in {:.1}s", timer.elapsed().as_secs_f64());
+        }
+        Ok(())
     }
 
     /// Synthesize speech from text.
@@ -143,6 +244,9 @@ impl VoxPipeline {
                 .model_dir
                 .as_deref()
                 .unwrap_or_else(|| Path::new("models/VoxCPM2"));
+            // Ensure model weights are cached before synthesis
+            let is_clone = req.ref_audio_path.is_some();
+            self.ensure_cache(model_dir, is_clone)?;
             self.synthesize_real(req, model_dir, sample_rate, cancel)?
         };
 
@@ -212,24 +316,33 @@ impl VoxPipeline {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("VoxConfig required for real synthesis"))?;
 
-        // ── Load all weights ──
-        let main_vb = weights::load_main_vb(model_dir, dev)?;
-        // AudioVAE — try CUDA first, fall back to CPU if cuBLAS conv1d errors
+        // ── Access cached weights ──
+        let cache = self.cache.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Model cache not populated — call ensure_cache() before synthesize_real")
+        })?;
+        let main_vb = cache.main_vb(dev);
+        // AudioVAE — use CUDA device for AudioVAE if available
         let audiovae_dev = if matches!(dev, Device::Cuda(_)) {
             dev
         } else {
             &Device::Cpu
         };
-        // Voice clone: load full audiovae tensors (encoder + decoder) when ref_audio is provided.
+        // Voice clone: use full audiovae tensors (encoder + decoder) from cache
         let is_clone = req.ref_audio_path.is_some();
         let audiovae_tensors = if is_clone {
-            weights::load_audiovae_all_tensors(model_dir, audiovae_dev)?
+            cache
+                .audiovae_all_tensors
+                .clone()
+                .unwrap_or_else(|| {
+                    weights::load_audiovae_all_tensors(model_dir, audiovae_dev)
+                        .expect("failed to load audiovae encoder tensors fallback")
+                })
         } else {
-            weights::load_audiovae_decoder_tensors(model_dir, audiovae_dev)?
+            cache.audiovae_decoder_tensors.clone()
         };
 
-        // ── Tokenizer ──
-        let tokenizer = crate::tokenizer::VoxTokenizer::from_model_dir(model_dir)?;
+        // ── Tokenizer (cached) ──
+        let tokenizer = cache.tokenizer.clone();
         let target_text = build_voice_design_text(&req.text, req.voice_design.as_deref());
         let tokens = tokenizer.encode_zero_shot(&target_text)?;
         if tokens.is_empty() {
@@ -244,6 +357,12 @@ impl VoxPipeline {
         let input_ids = if let Some(ref_path) = &req.ref_audio_path {
             // Load TSLM first (needed for embed_text in encode_ref_prefix)
             let mut tslm_clone = TSLM::load(&main_vb.pp("base_lm"), &config.lm_config, dev, false)?;
+            // Use cached audiovae encoder tensors if available
+            let encoder_tensors = if is_clone {
+                cache.audiovae_all_tensors.as_ref()
+            } else {
+                None
+            };
             let prefix = encode_ref_prefix(
                 model_dir,
                 config,
@@ -251,6 +370,7 @@ impl VoxPipeline {
                 ref_path,
                 &tokenizer,
                 &main_vb,
+                encoder_tensors,
                 &mut tslm_clone,
                 &tokens,
                 req.clone_strength,
@@ -505,6 +625,8 @@ pub fn encode_ref_prefix(
     ref_audio_path: &Path,
     tokenizer: &VoxTokenizer,
     main_vb: &VarBuilder,
+    // Optional pre-loaded audoVAE encoder tensors; loaded on demand if None.
+    audiovae_encoder_tensors: Option<&HashMap<String, Tensor>>,
     tslm: &mut TSLM,
     text_ids: &[u32],
     clone_strength: f64,
@@ -539,8 +661,19 @@ pub fn encode_ref_prefix(
         samples_16k.len() as f64 / 16000.0
     );
 
-    // ── 2. Load AudioVAE encoder ──
-    let audiovae_tensors = weights::load_audiovae_encoder_tensors(model_dir, dev)?;
+    // ── 2. Load AudioVAE encoder tensors (use cached if provided) ──
+    let audiovae_tensors = match audiovae_encoder_tensors {
+        Some(full_tensors) => {
+            // Filter to encoder.* only from the full set
+            let enc: HashMap<String, Tensor> = full_tensors
+                .iter()
+                .filter(|(k, _)| k.starts_with("encoder."))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            enc
+        }
+        None => weights::load_audiovae_encoder_tensors(model_dir, dev)?,
+    };
     let encoder = AudioVAE::load_encoder(&audiovae_tensors, &config.audio_vae_config)?;
     let latent = encoder.encode(&audio_t)?; // [1, 64, T']
     let (_b, _c, t_total) = latent.dims3()?;

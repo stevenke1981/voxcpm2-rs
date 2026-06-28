@@ -145,6 +145,7 @@ pub fn render_chat_template(messages: &[ChatMessage], add_generation_prompt: boo
 // VoxTokenizer — main public API
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct VoxTokenizer {
     inner: Tokenizer,
     special: SpecialTokens,
