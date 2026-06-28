@@ -17,6 +17,8 @@ pub struct SpecialTokens {
     pub audio_end: u32,
     pub audio_prompt_start: Option<u32>,
     pub audio_prompt_end: Option<u32>,
+    pub ref_audio_start: u32,
+    pub ref_audio_end: u32,
 }
 
 impl SpecialTokens {
@@ -58,6 +60,8 @@ impl SpecialTokens {
             audio_end: resolve_custom("<|audio_end|>")?,
             audio_prompt_start: tokenizer.token_to_id("<|audio_prompt_start|>"),
             audio_prompt_end: tokenizer.token_to_id("<|audio_prompt_end|>"),
+            ref_audio_start: resolve_custom("<|ref_audio_start|>")?,
+            ref_audio_end: resolve_custom("<|ref_audio_end|>")?,
         })
     }
 }

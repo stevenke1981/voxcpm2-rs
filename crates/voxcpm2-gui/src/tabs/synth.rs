@@ -95,6 +95,9 @@ impl SynthTab {
                     max_autoregressive_steps: None,
                     t_scheduler: self.t_scheduler.clone(),
                     latent_norm_scale: self.latent_norm_scale,
+                    ref_audio_path: None,
+                    ref_transcript: None,
+                    clone_strength: 1.0,
                 };
                 self.pending_generate = Some(req);
                 self.generate_disabled = true;

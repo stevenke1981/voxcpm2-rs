@@ -48,6 +48,13 @@ fn should_check_stop(step: usize, min_steps: usize) -> bool {
 /// * `input_ids` — 初始 text token IDs `[B, T]`
 /// * `cancel` — 取消旗標
 ///
+/// Voice Clone additional params:
+/// * `init_combined_embeds` — Pre-computed combined embeddings `[B, T, 2048]`
+///   for TSLM prefill. When Some, used instead of `embed_tokens(input_ids)`.
+///   Already blended: `text_mask * embed(tokens) + (1-text_mask) * feat_embeds`.
+/// * `init_feat_embeds` — Feat_embed part `[B, T, 2048]` for RALM prefill.
+///   When None (text-only), zeros are used.
+///
 /// # Returns
 /// * `[B, feat_dim, total_frames]` 生成的聲學特徵
 pub fn generate_autoregressive(
@@ -57,6 +64,36 @@ pub fn generate_autoregressive(
     dev: &Device,
     input_ids: &Tensor,
     cancel: Option<&AtomicBool>,
+) -> anyhow::Result<Tensor> {
+    generate_autoregressive_with(main_vb, config, req, dev, input_ids, cancel, None, None)
+}
+
+/// 語音克隆專用：使用預先計算好的 combined embeddings + feat embeddings 進行自回歸生成。
+pub fn generate_autoregressive_clone(
+    main_vb: &VarBuilder,
+    config: &VoxConfig,
+    req: &SynthRequest,
+    dev: &Device,
+    input_ids: &Tensor,
+    cancel: Option<&AtomicBool>,
+    init_combined_embeds: &Tensor,
+    init_feat_embeds: &Tensor,
+) -> anyhow::Result<Tensor> {
+    generate_autoregressive_with(
+        main_vb, config, req, dev, input_ids, cancel,
+        Some(init_combined_embeds), Some(init_feat_embeds),
+    )
+}
+
+fn generate_autoregressive_with(
+    main_vb: &VarBuilder,
+    config: &VoxConfig,
+    req: &SynthRequest,
+    dev: &Device,
+    input_ids: &Tensor,
+    cancel: Option<&AtomicBool>,
+    init_combined_embeds: Option<&Tensor>,
+    init_feat_embeds: Option<&Tensor>,
 ) -> anyhow::Result<Tensor> {
     let check_cancel = |name: &str| -> anyhow::Result<()> {
         if let Some(flag) = cancel {
@@ -81,7 +118,20 @@ pub fn generate_autoregressive(
 
     // ── 載入 KV cache 版本的 TSLM ──
     let mut tslm_kv = TSLM::load(&main_vb.pp("base_lm"), &config.lm_config, dev, true)?;
-    let h_lm_init = tslm_kv.forward(input_ids, 0)?; // [B, T, 2048], 同時填充 KV cache
+    // Determine model dtype (BF16 on CUDA, F32 on CPU)
+    let model_dtype = main_vb.dtype();
+    // Voice clone: use pre-computed combined embeddings if provided.
+    // Must match model dtype to avoid F32×BF16 matmul errors.
+    let h_lm_init = if let Some(embeds) = init_combined_embeds {
+        let embeds = if embeds.dtype() != model_dtype {
+            embeds.to_dtype(model_dtype)?
+        } else {
+            embeds.clone()
+        };
+        tslm_kv.forward_embeds(&embeds, 0)?
+    } else {
+        tslm_kv.forward(input_ids, 0)?
+    }; // [B, T, 2048], 同時填充 KV cache
     eprintln!(
         "  [autoregressive] TSLM init: seq_len={seq_len} h_lm_init.shape={:?} peak={:.6}",
         h_lm_init.shape(),
@@ -154,13 +204,23 @@ pub fn generate_autoregressive(
 
     // Python zero-shot prefill:
     //   residual_enc_inputs = fusion_concat_proj(cat((enc_outputs, feat_mask * feat_embed), dim=-1))
-    // With all-text zero-shot input, feat_mask is false for every token, so the second half is zeros.
-    let residual_zero = Tensor::zeros(
-        &[h_lm_init.dim(0)?, h_lm_init.dim(1)?, h_lm_init.dim(2)?],
-        h_lm_init.dtype(),
-        dev,
-    )?;
-    let residual_prefill = Tensor::cat(&[&h_lm_init, &residual_zero], 2)?;
+    // Zero-shot: feat_mask is false for all positions → second half is zeros.
+    // Voice clone: feat_embed is non-zero for ref audio positions.
+    let feat_part = match init_feat_embeds {
+        Some(f) => {
+            if f.dtype() != model_dtype {
+                f.to_dtype(model_dtype)?
+            } else {
+                f.clone()
+            }
+        }
+        None => Tensor::zeros(
+            &[h_lm_init.dim(0)?, h_lm_init.dim(1)?, h_lm_init.dim(2)?],
+            h_lm_init.dtype(),
+            dev,
+        )?,
+    };
+    let residual_prefill = Tensor::cat(&[&h_lm_init, &feat_part], 2)?;
     let residual_prefill = fusion_concat_proj.forward(&residual_prefill)?;
 
     // ── 自回歸迴圈 ──

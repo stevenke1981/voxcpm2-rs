@@ -124,6 +124,33 @@ pub fn load_audiovae_decoder_tensors(
     Ok(tensors)
 }
 
+/// Load audiovae encoder tensors as a raw HashMap for manual access.
+///
+/// The same safetensors file contains both decoder.* and encoder.* tensors.
+/// After weight_norm fusion, this function retains only encoder.* keys.
+pub fn load_audiovae_encoder_tensors(
+    model_dir: &Path,
+    device: &Device,
+) -> Result<HashMap<String, Tensor>> {
+    let mut tensors = load_audiovae_all_tensors(model_dir, device)?;
+    tensors.retain(|k, _| k.starts_with("encoder."));
+    Ok(tensors)
+}
+
+/// Load ALL audiovae tensors (encoder + decoder) with weight_norm fusion.
+///
+/// Use this when both encoder and decoder are needed (e.g., voice cloning).
+/// Filter to specific prefix after loading.
+pub fn load_audiovae_all_tensors(
+    model_dir: &Path,
+    device: &Device,
+) -> Result<HashMap<String, Tensor>> {
+    let path = model_dir.join("audiovae.safetensors");
+    let mut tensors = candle_core::safetensors::load(path, device)?;
+    fuse_weight_norm(&mut tensors)?;
+    Ok(tensors)
+}
+
 /// Quick sanity: load model.safetensors and report tensor count.
 pub fn inspect_main_weights(model_dir: &Path, device: &Device) -> Result<usize> {
     let tensors = candle_core::safetensors::load(model_dir.join("model.safetensors"), device)?;

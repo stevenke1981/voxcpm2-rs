@@ -15,6 +15,62 @@ pub struct AudioPolishReport {
     pub headroom_gain: f32,
 }
 
+/// Load a mono WAV file and return (samples, sample_rate).
+/// Supports 16-bit PCM (most common). Other formats may fail.
+pub fn load_wav_mono(path: impl AsRef<Path>) -> anyhow::Result<(Vec<f32>, u32)> {
+    let mut reader = hound::WavReader::open(path.as_ref())
+        .map_err(|e| anyhow::anyhow!("open WAV: {e}"))?;
+    let spec = reader.spec();
+    let sample_rate = spec.sample_rate;
+
+    let samples: Vec<f32> = match (spec.channels, spec.bits_per_sample, spec.sample_format) {
+        (1, 16, hound::SampleFormat::Int) => {
+            reader.samples::<i16>()
+                .map(|s| s.unwrap_or(0) as f32 / i16::MAX as f32)
+                .collect()
+        }
+        (2, 16, hound::SampleFormat::Int) => {
+            // Downmix stereo to mono
+            let stereo: Vec<f32> = reader.samples::<i16>()
+                .map(|s| s.unwrap_or(0) as f32 / i16::MAX as f32)
+                .collect();
+            stereo.chunks(2).map(|ch| (ch[0] + ch[1]) * 0.5).collect()
+        }
+        _ => anyhow::bail!(
+            "unsupported WAV format: {}ch {}bit {:?}",
+            spec.channels,
+            spec.bits_per_sample,
+            spec.sample_format,
+        ),
+    };
+
+    Ok((samples, sample_rate))
+}
+
+/// Simple linear interpolation resampling.
+/// `src_rate` → `dst_rate`. Only downsamples (src_rate >= dst_rate).
+pub fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+    if src_rate == dst_rate {
+        return samples.to_vec();
+    }
+    let ratio = src_rate as f64 / dst_rate as f64;
+    let out_len = (samples.len() as f64 / ratio).ceil() as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let src_pos = i as f64 * ratio;
+        let src_idx = src_pos as usize;
+        let frac = src_pos - src_idx as f64;
+        if src_idx + 1 < samples.len() {
+            let a = samples[src_idx] as f64;
+            let b = samples[src_idx + 1] as f64;
+            out.push((a + (b - a) * frac) as f32);
+        } else {
+            out.push(samples.last().copied().unwrap_or(0.0));
+        }
+    }
+    out
+}
+
 pub fn write_wav_f32(
     path: impl AsRef<Path>,
     samples: &[f32],

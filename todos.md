@@ -222,6 +222,18 @@
 
 ---
 
+## ✅ Milestone VC：Voice Cloning Pipeline（2026-06-28 完成實作）
+
+- [x] **VC1**: AudioVAE encoder for clone — load encoder weights, encode ref audio, output latent [1, 64, T]
+- [x] **VC2**: `SpecialTokens` — add `ref_audio_start` (103), `ref_audio_end` (104) to tokenizer
+- [x] **VC3**: `TSLM::forward_embeds()` + `embed_text()` — prefill TSLM with pre-computed embeddings
+- [x] **VC4**: `encode_ref_prefix()` in pipeline.rs — full ref audio → LocEnc patches → combined embeddings
+- [x] **VC5**: `generate_autoregressive_clone()` in autoregressive.rs — clone-specific AR loop entry point
+- [x] **VC6**: CLI `clone` subcommand — all params: `--ref-audio`, `--clone-strength`, CFG/steps/seed/scheduler
+- [x] **VC7**: GUI clone tab — redesigned with separate text field, sim slider, full backend
+- [x] **VC8**: Runtime debugging — fixed dtype mismatch (F32×BF16 in 3 places) + ref_feat shape (stack→cat)
+- [x] **VC9**: End-to-end verified — 15s ref audio → 3.2s cloned speech output at 48kHz WAV
+
 ## 📋 Milestone I：egui GUI 改善
 
 - [x] Model tab — 目錄瀏覽、device 選擇、inspect 模型、必備檔案檢查
@@ -231,7 +243,7 @@
 - [x] Background worker thread — 非阻塞生成（crossbeam channel）
 - [x] **Cancel generation** — `Arc<AtomicBool>` 在每個 DiT step 檢查
 - [x] **Cloning tab（UI scaffold）** — 檔案選取器、similarity slider、未實作提示
-- [ ] **Cloning tab（完整後端整合）** — 需等 Milestone Z 完成後才能啟用 Clone 按鈕
+- [x] **Cloning tab（完整後端整合）** — 64 秒端到端管線（AudioVAE encoder → LocEnc patches → TSLM/RALM clone prefill → autoregressive DiT → AudioVAE decode）<br>⚠️ 注意：需 `clone_strength` 匹配 BF16 vs F32 dtype（patch→BF16 編碼，combine→F32，AR prefill→BF16）
 - [ ] Model tab liftoff status integration（整合完整 pipeline 初始化狀態）
 
 ---

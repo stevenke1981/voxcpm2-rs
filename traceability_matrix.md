@@ -49,16 +49,24 @@
 | D6 | `stop_head` weight shape `[2, 2048]` no bias | `linear_no_bias(2048, 2)` | ✅ 已對齊 |
 | D7 | `CausalConv1d`/`CausalTransposeConv1d` | Standard Conv1d/ConvTranspose1d with weight_norm fusion | Rust 使用 fused weight_norm |
 
-## 未實作的功能（需 Milestone Z 完成後）
+## 未實作的功能
 
 | Feature | Python File | Rust Status |
 |---|---|---|
-| Reference audio cloning | `voxcpm2.py:build_prompt_cache()` | ❌ Not ported |
 | Streaming generation | `voxcpm2.py:_generate(streaming=True)` | ❌ Not ported |
 | LoRA fine-tuning | `lora_ft_webui.py` | ❌ Out of scope |
 | VAD silence trimming | `voxcpm2.py:_trim_audio_silence_vad()` | ❌ Not ported |
 | `build_prompt_cache` / cache merge | `voxcpm2.py` | ❌ Not ported |
 | Training code | `training/*` | ❌ Out of scope |
+
+## 已實作的語音克隆功能
+
+| Feature | Python File | Rust File | Status |
+|---|---|---|---|
+| Reference audio cloning | `voxcpm2.py:build_prompt_cache()` | `autoregressive.rs:generate_autoregressive_clone()` | ✅ Full pipeline: AudioVAE encoder → LocEnc patches → TSLM/RALM prefill → autoregressive DiT loops → AudioVAE decoder |
+| `special_tokens` for clone | `tokenizer.py` | `tokenizer.rs:SpecialTokens` | ✅ `ref_audio_start` (103), `ref_audio_end` (104) |
+| CLI clone subcommand | `cli.py` | `crates/voxcpm2-cli/src/main.rs` | ✅ `clone` subcommand with `--ref-audio`, `--clone-strength`, all synth params |
+| GUI clone tab | `app.py` | `crates/voxcpm2-gui/src/tabs/clone.rs` | ✅ Full backend integration: separate text field, parameters, similarity slider |
 
 ## Gate Progress
 

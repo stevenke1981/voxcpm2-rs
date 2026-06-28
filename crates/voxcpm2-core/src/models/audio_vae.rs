@@ -71,21 +71,15 @@ fn load_conv_weight(
     Ok(t.clone())
 }
 
-/// Compute causal padding for a conv layer given (kernel, dilation).
+/// Compute causal padding for a regular Conv1d (stride=1).
 /// Python `CausalConv1d` pads only the LEFT side:
 ///   pad_len = (kernel - 1) * dilation / 2   (integer division)
-/// Then applies F.pad(x, (pad_len * 2 - output_padding, 0)) before conv.
-/// For causal conv, we use `padding = 0` and do manual left-pad,
-/// OR use `padding = pad_len` with asymmetry.
-///
-/// We implement causal padding by pre-padding the input tensor on the left side.
-/// Causal (left-only) padding for a Regular Conv1d, matching Python's CausalConv1d.
-///
-/// Python forward: `F.pad(x, (pad*2 - output_padding, 0))` then conv.
+///   output_padding = max(0, stride - 1)    (Python: stride - 1 if stride > 1 else 0)
+///   left_pad = pad_len * 2 - output_padding
 /// For stride=1, output_padding=0: left pad = pad * 2, so conv output preserves width.
 fn causal_pad(x: &Tensor, kernel: usize, dilation: usize, stride: usize) -> Result<Tensor> {
     let pad_len = dilation * (kernel - 1) / 2;
-    let output_padding = if stride > 1 { 1 } else { 0 };
+    let output_padding = if stride > 1 { stride - 1 } else { 0 };
     let left_pad = pad_len * 2 - output_padding;
     if left_pad == 0 {
         return Ok(x.clone());
@@ -557,6 +551,212 @@ impl AudioVAE {
         let vals = waveform.flatten_all()?.to_vec1::<f32>()?;
         super::super::audio::check_audio(&vals)
             .map_err(|e| candle_core::Error::Msg(format!("AudioVAE check: {e}")))
+    }
+}
+
+// ===========================================================================
+// AudioVAE Encoder — CausalEncoder (inverse of the decoder)
+// ===========================================================================
+//
+// Python reference: `audio_vae_v2.py` CausalEncoder
+//
+// Encoder structure (from audiovae.safetensors encoder.* keys):
+//
+//   block.0: CausalConv1d(1→128, k=7) — no activation [stride=1]
+//   block.1–4: CausalEncoderBlock each:
+//     block.0–2: CausalResidualUnit(128) each (dilations 1,3,9) [same as decoder]
+//     block.3: Snake1d(C_in) alpha
+//     block.4: CausalConv1d(C_in→C_out, kernel, stride) — strided downsampling
+//   fc_mu: CausalConv1d(2048→64, k=3) — latent mean
+//   fc_logvar: CausalConv1d(2048→64, k=3) — latent log variance
+//
+// Encoder rates: [2, 5, 8, 8] with kernels: block.1(k=4), block.2(k=10),
+// block.3(k=16), block.4(k=16). Total downsampling: 640×.
+// ===========================================================================
+
+/// Encoder block: 3× CausalResidualUnit → Snake1d → Strided CausalConv1d
+#[derive(Debug, Clone)]
+struct CausalEncoderBlock {
+    sub_blocks: Vec<CausalResidualUnit>,
+    snake: Snake1d,
+    down_conv: Conv1d,
+    kernel: usize,
+    stride: usize,
+}
+
+impl CausalEncoderBlock {
+    fn load(
+        map: &HashMap<String, Tensor>,
+        prefix: &str,
+        c_in: usize,
+        c_out: usize,
+        kernel: usize,
+        stride: usize,
+    ) -> Result<Self> {
+        // 3× CausalResidualUnits with dilations [1, 3, 9] (same as decoder)
+        let dilations = [1usize, 3, 9];
+        let mut sub_blocks = Vec::new();
+        for (i, &dilation) in dilations.iter().enumerate() {
+            let sub = CausalResidualUnit::load(
+                map,
+                &format!("{prefix}.block.{i}"),
+                c_in,
+                dilation,
+            )?;
+            sub_blocks.push(sub);
+        }
+
+        // Snake1d before stride conv
+        let snake = Snake1d::load(map, &format!("{prefix}.block.3.alpha"), c_in)?;
+
+        // Strided CausalConv1d(c_in → c_out, kernel=kernel, stride=stride)
+        // After weight_norm fusion, the fused weight key is {prefix}.block.4.weight
+        let dw_weight = load_conv_weight(
+            map,
+            &format!("{prefix}.block.4.weight"),
+            &[c_out, c_in, kernel],
+        )?;
+        let dw_bias = load_1d(map, &format!("{prefix}.block.4.bias"), c_out)?;
+        let down_conv = Conv1d::new(
+            dw_weight,
+            Some(dw_bias),
+            Conv1dConfig {
+                padding: 0, // manual causal left-pad
+                stride,
+                ..Default::default()
+            },
+        );
+
+        Ok(Self { sub_blocks, snake, down_conv, kernel, stride })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        // 3× CausalResidualUnits
+        let mut h = x.clone();
+        for sb in &self.sub_blocks {
+            h = sb.forward(&h)?;
+        }
+        // Snake1d before stride conv
+        let h = self.snake.forward(&h)?;
+        // Strided CausalConv1d with causal left-padding
+        let h = causal_pad(&h, self.kernel, 1, self.stride)?;
+        let h = self.down_conv.forward(&h)?;
+        Ok(h)
+    }
+}
+
+/// Full causal encoder: block.0 → 4× CausalEncoderBlock → fc_mu (+ fc_logvar loaded)
+#[derive(Debug, Clone)]
+pub struct CausalEncoder {
+    block_0: Conv1d,                          // 1→128, k=7 (no activation)
+    down_blocks: Vec<CausalEncoderBlock>,      // blocks 1–4
+    fc_mu: Conv1d,                             // 2048→64, k=3
+    #[allow(dead_code)]
+    fc_logvar: Conv1d,                         // 2048→64, k=3 (only used for training)
+}
+
+impl CausalEncoder {
+    /// Load encoder from fused weight map (weight_norm already fused).
+    pub fn load(tensors: &HashMap<String, Tensor>, _cfg: &AudioVaeConfig) -> Result<Self> {
+        // block.0: CausalConv1d(1→128, k=7) — no activation
+        // After weight_norm fusion: encoder.block.0.weight
+        let w0 = load_conv_weight(tensors, "encoder.block.0.weight", &[128, 1, 7])?;
+        let b0 = load_1d(tensors, "encoder.block.0.bias", 128)?;
+        let block_0 = Conv1d::new(
+            w0,
+            Some(b0),
+            Conv1dConfig {
+                padding: 0, // manual causal
+                ..Default::default()
+            },
+        );
+
+        // blocks 1–4: CausalEncoderBlock
+        let spec: [(usize, usize, usize, usize, usize); 4] = [
+            (1, 128, 256, 4, 2),   // stride=2, k=4
+            (2, 256, 512, 10, 5),  // stride=5, k=10
+            (3, 512, 1024, 16, 8), // stride=8, k=16
+            (4, 1024, 2048, 16, 8),// stride=8, k=16
+        ];
+        let mut down_blocks = Vec::new();
+        for &(n, c_in, c_out, kernel, stride) in &spec {
+            let block = CausalEncoderBlock::load(
+                tensors,
+                &format!("encoder.block.{n}"),
+                c_in, c_out, kernel, stride,
+            )?;
+            down_blocks.push(block);
+        }
+
+        // fc_mu: CausalConv1d(2048→64, k=3)
+        // fc_logvar: CausalConv1d(2048→64, k=3)
+        let fc_mu = Self::load_fc(tensors, "encoder.fc_mu", 64, 2048, 3)?;
+        let fc_logvar = Self::load_fc(tensors, "encoder.fc_logvar", 64, 2048, 3)?;
+
+        Ok(Self { block_0, down_blocks, fc_mu, fc_logvar })
+    }
+
+    fn load_fc(
+        map: &HashMap<String, Tensor>,
+        prefix: &str,
+        out_ch: usize,
+        in_ch: usize,
+        kernel: usize,
+    ) -> Result<Conv1d> {
+        let w = load_conv_weight(
+            map,
+            &format!("{prefix}.weight"),
+            &[out_ch, in_ch, kernel],
+        )?;
+        let b = load_1d(map, &format!("{prefix}.bias"), out_ch)?;
+        Ok(Conv1d::new(
+            w,
+            Some(b),
+            Conv1dConfig {
+                padding: 0,
+                ..Default::default()
+            },
+        ))
+    }
+
+    /// Encode mono audio waveform to latent representation.
+    ///
+    /// # Args
+    /// * `audio` — shape `[batch, 1, samples]` mono audio at 16000 Hz
+    ///
+    /// # Returns
+    /// * shape `[batch, latent_dim, time_frames]` — the latent features
+    ///   where `time_frames ≈ samples / 640` (total downsampling rate)
+    pub fn encode(&self, audio: &Tensor) -> Result<Tensor> {
+        let mut h = audio.clone(); // [N, 1, T]
+
+        // block.0: CausalConv1d(1→128, k=7) — no activation
+        h = causal_pad(&h, 7, 1, 1)?;
+        h = self.block_0.forward(&h)?;
+
+        // blocks 1–4: CausalEncoderBlocks with strided downsampling
+        for (_i, block) in self.down_blocks.iter().enumerate() {
+            h = block.forward(&h)?;
+        }
+        // h: [N, 2048, T']
+
+        // fc_mu: latent mean [N, 64, T']
+        let mu = causal_pad(&h, 3, 1, 1)?;
+        let mu = self.fc_mu.forward(&mu)?;
+
+        Ok(mu)
+    }
+}
+
+// ===========================================================================
+// AudioVAE — top-level API (decode + encode)
+// ===========================================================================
+
+impl AudioVAE {
+    /// Create an encoder from the same fused tensor map.
+    /// The encoder is separate from the decoder; both share the same safetensors.
+    pub fn load_encoder(tensors: &HashMap<String, Tensor>, cfg: &AudioVaeConfig) -> Result<CausalEncoder> {
+        CausalEncoder::load(tensors, cfg)
     }
 }
 

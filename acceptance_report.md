@@ -99,7 +99,7 @@ All 23 non-ignored unit tests pass on CPU.
 - Output tab: waveform, rodio playback, WAV export ✓
 - Diagnostics tab: device info, VRAM estimate, event log ✓
 - Cancel generation ✓
-- Cloning tab: UI scaffold (disabled backend) ✓
+- Cloning tab: Full backend integration (encoder + decoder + clone prefill + parameters) ✓
 
 ### G8: GPU benchmark
 

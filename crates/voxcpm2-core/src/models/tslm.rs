@@ -132,6 +132,16 @@ impl TSLM {
         })
     }
 
+    /// Embed token IDs with optional muP scale_emb.
+    /// 用於 voice clone：外部計算 combined embedding（text_embed + feat_embed blend）。
+    pub fn embed_text(&self, input_ids: &Tensor) -> Result<Tensor> {
+        let mut h = self.embed_tokens.forward(input_ids)?;
+        if self.scale_emb != 1.0 {
+            h = (h * self.scale_emb)?;
+        }
+        Ok(h)
+    }
+
     /// Forward: input_ids shape [batch, seq_len]
     /// 回傳 hidden states: [batch, seq_len, hidden_size]
     pub fn forward(&mut self, input_ids: &Tensor, step: usize) -> Result<Tensor> {
@@ -142,6 +152,30 @@ impl TSLM {
         }
 
         let causal = true; // TSLM uses causal attention
+        for layer in self.layers.iter_mut() {
+            h = layer.forward(&h, &self.rope, step, causal)?;
+        }
+
+        h = self.norm.forward(&h)?;
+        // muP scale_depth
+        if self.scale_depth != 1.0 {
+            h = (h / self.scale_depth)?;
+        }
+        Ok(h)
+    }
+
+    /// Forward pass with pre-computed embeddings (no token lookup).
+    ///
+    /// 用於 voice clone prefill（融合 text_embed + feat_embed）：
+    /// - `input_embeds` — 已 blend 的 combined embedding `[B, T, hidden_size]`
+    /// - 使用 causal attention 進行全序列 prefill 並填充 KV cache。
+    pub fn forward_embeds(&mut self, input_embeds: &Tensor, step: usize) -> Result<Tensor> {
+        let mut h = input_embeds.clone();
+        // muP scaling
+        if self.scale_emb != 1.0 {
+            h = (h * self.scale_emb)?;
+        }
+        let causal = true; // Full sequence prefill with causal mask
         for layer in self.layers.iter_mut() {
             h = layer.forward(&h, &self.rope, step, causal)?;
         }

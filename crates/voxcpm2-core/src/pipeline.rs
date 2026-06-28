@@ -1,12 +1,14 @@
 use crate::{
     audio,
-    autoregressive::generate_autoregressive,
+    autoregressive::{generate_autoregressive, generate_autoregressive_clone},
     config::VoxConfig,
     device::{self, DevicePreference},
     models::*,
+    tokenizer::VoxTokenizer,
     weights,
 };
 use candle_core::{DType, Device, Module, Tensor};
+use candle_nn::VarBuilder;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,7 +42,22 @@ pub struct SynthRequest {
     /// Recommended: 0.7875 (= 1.26 / 1.60) to match Python latent std.
     #[serde(default)]
     pub latent_norm_scale: Option<f64>,
+    /// Optional reference audio path for voice cloning.
+    /// When set, the pipeline uses AudioVAE encoder to extract speaker
+    /// characteristics and prefixes them in the autoregressive loop.
+    #[serde(default)]
+    pub ref_audio_path: Option<PathBuf>,
+    /// Optional reference audio transcript (not yet used for alignment,
+    /// but reserved for future phoneme-based conditioning).
+    #[serde(default)]
+    pub ref_transcript: Option<String>,
+    /// Voice clone strength: 0.0 = no clone (text-only), 1.0 = full clone.
+    /// Blends the reference audio feat_embeds with zeros.
+    #[serde(default = "default_clone_strength")]
+    pub clone_strength: f64,
 }
+
+fn default_clone_strength() -> f64 { 1.0 }
 
 fn default_t_scheduler() -> String { "uniform".into() }
 
@@ -61,6 +78,9 @@ impl Default for SynthRequest {
             max_autoregressive_steps: None,
             t_scheduler: "uniform".into(),
             latent_norm_scale: None,
+            ref_audio_path: None,
+            ref_transcript: None,
+            clone_strength: 1.0,
         }
     }
 }
@@ -200,7 +220,13 @@ impl VoxPipeline {
         } else {
             &Device::Cpu
         };
-        let audiovae_tensors = weights::load_audiovae_decoder_tensors(model_dir, audiovae_dev)?;
+        // Voice clone: load full audiovae tensors (encoder + decoder) when ref_audio is provided.
+        let is_clone = req.ref_audio_path.is_some();
+        let audiovae_tensors = if is_clone {
+            weights::load_audiovae_all_tensors(model_dir, audiovae_dev)?
+        } else {
+            weights::load_audiovae_decoder_tensors(model_dir, audiovae_dev)?
+        };
 
         // ── Tokenizer ──
         let tokenizer = crate::tokenizer::VoxTokenizer::from_model_dir(model_dir)?;
@@ -209,10 +235,41 @@ impl VoxPipeline {
         if tokens.is_empty() {
             anyhow::bail!("tokenizer returned empty tokens");
         }
-        let input_ids =
-            Tensor::from_slice(&tokens, &[1, tokens.len()], dev)?.to_dtype(DType::I64)?;
-        let seq_len = tokens.len();
+
+        // Voice clone: encode ref audio and build combined prefix
+        // (needs TSLM for embed_text, so defer AR preparation until after TSLM is loaded)
+        // We'll store the result here and use it during AR generation.
+        let mut clone_prefix: Option<RefPrefixResult> = None;
+
+        let input_ids = if let Some(ref_path) = &req.ref_audio_path {
+            // Load TSLM first (needed for embed_text in encode_ref_prefix)
+            let mut tslm_clone = TSLM::load(&main_vb.pp("base_lm"), &config.lm_config, dev, false)?;
+            let prefix = encode_ref_prefix(
+                model_dir,
+                config,
+                dev,
+                ref_path,
+                &tokenizer,
+                &main_vb,
+                &mut tslm_clone,
+                &tokens,
+                req.clone_strength,
+            )?;
+            let n_patches = prefix.n_patches;
+            let combined_seq_len = prefix.combined_ids.dim(1)?;
+            let combined_ids = prefix.combined_ids.clone();
+            clone_prefix = Some(prefix);
+            eprintln!("  [clone] ready: {n_patches} ref patches, combined_seq_len={combined_seq_len}");
+            combined_ids
+        } else {
+            Tensor::from_slice(&tokens, &[1, tokens.len()], dev)?.to_dtype(DType::I64)?
+        };
+
+        let seq_len = input_ids.dim(1)?;
         let text_len = target_text.chars().count();
+        if seq_len == 0 {
+            anyhow::bail!("tokenizer returned empty tokens");
+        }
 
         // ── TSLM forward ──
         check_cancel("TSLM")?;
@@ -267,9 +324,16 @@ impl VoxPipeline {
             ar_config.dit_config.cfm_config.t_scheduler_std,
         );
 
-        // ── NEW: autoregressive generation ──
+        // ── Autoregressive generation ──
         check_cancel("autoregressive")?;
-        let latent = generate_autoregressive(&main_vb, &ar_config, req, dev, &input_ids, cancel)?;
+        let latent = if let Some(prefix) = &clone_prefix {
+            generate_autoregressive_clone(
+                &main_vb, &ar_config, req, dev, &prefix.combined_ids, cancel,
+                &prefix.combined_embeds, &prefix.feat_embeds,
+            )?
+        } else {
+            generate_autoregressive(&main_vb, &ar_config, req, dev, &input_ids, cancel)?
+        };
         // latent shape: [1, feat_dim, seq_len]
         let latent_peak = latent
             .abs()?
@@ -317,7 +381,6 @@ impl VoxPipeline {
                 //    scale them down so that max(std) = PYTHON_CH_STD_CAP.
                 //    Scale factor per channel: min(1.0, cap / std)
                 let cap_t = Tensor::full(PYTHON_CH_STD_CAP as f32, &[1, c, 1], dev)?;
-                let one_t = Tensor::full(1.0f32, &[1, c, 1], dev)?;
                 // scale_per_ch = min(1.0, cap / std)  => for each ch: if std > cap, std * (cap/std) = cap
                 // inv_ratio = min(1.0, cap / std) = cap / max(std, cap)
                 // We compute: safe_std = max(std, cap), then inv_ratio = cap / safe_std
@@ -399,6 +462,225 @@ impl VoxPipeline {
         let vals = waveform.squeeze(0)?.squeeze(0)?.to_vec1::<f32>()?;
         Ok(vals)
     }
+}
+
+/// Result of encoding a reference audio for voice cloning.
+pub struct RefPrefixResult {
+    /// Combined token IDs (ref + text): [1, T_total]
+    pub combined_ids: Tensor,
+    /// Combined embeddings (blended text_embed + feat_embed): [1, T_total, 2048]
+    pub combined_embeds: Tensor,
+    /// Feat_embed part (ref patches, zeros elsewhere): [1, T_total, 2048]
+    pub feat_embeds: Tensor,
+    /// Number of ref audio patches
+    pub n_patches: usize,
+}
+
+/// Encode a reference audio file and build the combined prefix for voice cloning.
+///
+/// Steps:
+///   1. Load reference audio WAV (any sample rate), resample to 16000 Hz
+///   2. Encode through AudioVAE CausalEncoder → [1, 64, T']
+///   3. Partition into patches of `patch_size` (=4) frames
+///   4. For each patch, encode through LocEnc (feat_encoder) → [1, 1, 2048]
+///   5. Build combined token IDs:
+///      `[ref_audio_start, pad×n_patches, ref_audio_end, text_ids...]`
+///   6. Build text_mask = 1 for token positions, 0 for audio (pad) positions
+///   7. Build combined_embed = text_mask * embed(tokens) + (1-text_mask) * feat_embeds
+///
+/// # Args
+/// * `model_dir` — model directory with `audiovae.safetensors` and `model.safetensors`
+/// * `config` — VoxConfig
+/// * `dev` — compute device
+/// * `ref_audio_path` — path to reference WAV file
+/// * `tokenizer` — VoxTokenizer (for special tokens)
+/// * `main_vb` — model.safetensors VarBuilder (for feat_encoder weights)
+/// * `tslm` — TSLM instance for embed_token lookups
+/// * `text_ids` — the text-only token IDs (from `tokenizer.encode_zero_shot`)
+/// * `clone_strength` — blend factor for reference audio features (0.0=no clone, 1.0=full)
+pub fn encode_ref_prefix(
+    model_dir: &Path,
+    config: &VoxConfig,
+    dev: &Device,
+    ref_audio_path: &Path,
+    tokenizer: &VoxTokenizer,
+    main_vb: &VarBuilder,
+    tslm: &mut TSLM,
+    text_ids: &[u32],
+    clone_strength: f64,
+) -> anyhow::Result<RefPrefixResult> {
+    // ── 1. Load and resample reference audio ──
+    let (samples, src_rate) = audio::load_wav_mono(ref_audio_path)?;
+    eprintln!(
+        "  [clone] loaded ref audio: {} samples at {} Hz",
+        samples.len(),
+        src_rate
+    );
+    let end_time = std::time::Instant::now();
+
+    let mut samples_16k = audio::resample(&samples, src_rate, 16000);
+    // Auto-trim to MAX_REF_SECS to prevent CUDA OOM in AudioVAE encoder
+    // (model.1 conv creates [1, 2048, T], ~23 GB for 178s audio).
+    const MAX_REF_SECS: f64 = 30.0;
+    let max_samples = (MAX_REF_SECS * 16000.0) as usize;
+    if samples_16k.len() > max_samples {
+        eprintln!(
+            "  [clone] trimming {} samples ({:.2}s) → {max_samples} samples ({MAX_REF_SECS}s) to prevent OOM",
+            samples_16k.len(),
+            samples_16k.len() as f64 / 16000.0,
+        );
+        samples_16k.truncate(max_samples);
+    }
+    let audio_t = Tensor::from_slice(&samples_16k, &[1, 1, samples_16k.len()], dev)?
+        .to_dtype(DType::F32)?;
+    eprintln!(
+        "  [clone] resampled to 16 kHz: {} samples ({:.2}s)",
+        samples_16k.len(),
+        samples_16k.len() as f64 / 16000.0
+    );
+
+    // ── 2. Load AudioVAE encoder ──
+    let audiovae_tensors = weights::load_audiovae_encoder_tensors(model_dir, dev)?;
+    let encoder = AudioVAE::load_encoder(&audiovae_tensors, &config.audio_vae_config)?;
+    let latent = encoder.encode(&audio_t)?; // [1, 64, T']
+    let (_b, _c, t_total) = latent.dims3()?;
+    let patch_size = config.patch_size; // 4
+    let n_patches = t_total / patch_size;
+    if n_patches == 0 {
+        anyhow::bail!(
+            "Reference audio too short: {t_total} latent frames, need at least {patch_size} (>= {:.2}s)",
+            patch_size as f64 * 640.0 / 16000.0
+        );
+    }
+    // Safety cap: ~256 patches = ~41s ref audio at 16kHz.
+    // Beyond this, the autoregressive prefix becomes too long for VRAM.
+    const MAX_PATCHES: usize = 256;
+    let n_patches = n_patches.min(MAX_PATCHES);
+    eprintln!(
+        "  [clone] AudioVAE encoder: latent [1, 64, {t_total}] → {n_patches} patches of {patch_size}",
+    );
+
+    // ── 3. Load feat_encoder (LocEnc) for patch encoding ──
+    let enc_rope_factors: Option<Vec<f64>> = config
+        .lm_config
+        .rope_scaling
+        .as_ref()
+        .map(|rs| rs.short_factor.clone());
+    let feat_dim = config.feat_dim;
+    let mut feat_enc = LocEnc::load(
+        main_vb,
+        &config.encoder_config,
+        feat_dim,
+        patch_size,
+        enc_rope_factors.as_deref(),
+    )?;
+
+    // ── 4. Encode each ref audio patch ──
+    // LocEnc weights are BF16 (from model.safetensors on CUDA), but AudioVAE latent
+    // is F32. Convert patch to model dtype (BF16) before encoding to match.
+    let model_dtype = main_vb.dtype();
+    let mut patch_embeds: Vec<Tensor> = Vec::with_capacity(n_patches);
+    for i in 0..n_patches {
+        let patch = latent.narrow(2, i * patch_size, patch_size)?; // [1, 64, 4]
+        let patch = patch.to_dtype(model_dtype)?; // BF16 to match feat_enc weights
+        let embed = feat_enc.encode(&patch)?; // [1, 1, 2048]
+        patch_embeds.push(embed);
+    }
+    // ref_feat: [n_patches, 1, 2048] — cat along dim 0 (stack would create extra dim)
+    let mut ref_feat = Tensor::cat(&patch_embeds, 0)?;
+    // Convert back to F32 for mask/combine operations (text_mask is F32)
+    ref_feat = ref_feat.to_dtype(DType::F32)?;
+    // Apply clone_strength: blend between full clone (1.0) and no clone (0.0)
+    if clone_strength != 1.0 {
+        let scale = Tensor::full(clone_strength as f32, &[], dev)?;
+        ref_feat = ref_feat.mul(&scale)?;
+    }
+    eprintln!(
+        "  [clone] feat_encoder: {n_patches} patches → [{n_patches}, 1, 2048] strength={clone_strength}",
+    );
+
+    // ── 5. Build combined token IDs ──
+    let special = tokenizer.special_tokens();
+    let pad_id = special.unk_token; // use <unk> as pad token for ref audio positions
+
+    let n_ref_tokens = 2 + n_patches; // ref_start + n_patches + ref_end
+    let mut combined_ids = Vec::with_capacity(n_ref_tokens + text_ids.len());
+    combined_ids.push(special.ref_audio_start);
+    for _ in 0..n_patches {
+        combined_ids.push(pad_id);
+    }
+    combined_ids.push(special.ref_audio_end);
+    combined_ids.extend_from_slice(text_ids);
+    let total_len = combined_ids.len();
+
+    eprintln!(
+        "  [clone] token sequence: ref_start={} pad×{n_patches} ref_end={} text={} total={total_len}",
+        special.ref_audio_start,
+        special.ref_audio_end,
+        text_ids.len(),
+    );
+
+    // ── 6. Build text_mask and feat_embeds_full ──
+    // Text positions (text_mask=1): ref_start (0), ref_end (n_patches+1),
+    //   and all text positions (n_patches+2..total)
+    // Audio positions (text_mask=0): the pad positions (1..n_patches+1)
+    let one = Tensor::full(1.0f32, &[1, 1, 2048], dev)?;
+    let zero = Tensor::zeros(&[1, 1, 2048], DType::F32, dev)?;
+
+    let mut text_mask_parts: Vec<Tensor> = Vec::with_capacity(total_len);
+    let mut feat_embed_parts: Vec<Tensor> = Vec::with_capacity(total_len);
+
+    // ref_audio_start position: text, no feat
+    text_mask_parts.push(one.clone()); // [1, 1, 2048]
+    feat_embed_parts.push(zero.clone()); // [1, 1, 2048]
+
+    // Pad positions (n_patches): audio, feat from encoder
+    for i in 0..n_patches {
+        text_mask_parts.push(zero.clone());
+        feat_embed_parts.push(ref_feat.narrow(0, i, 1)?); // [1, 1, 2048]
+    }
+
+    // ref_audio_end position: text, no feat
+    text_mask_parts.push(one.clone());
+    feat_embed_parts.push(zero.clone());
+
+    // Text token positions: text, no feat
+    let n_text = text_ids.len();
+    for _ in 0..n_text {
+        text_mask_parts.push(one.clone());
+        feat_embed_parts.push(zero.clone());
+    }
+
+    // Concatenate along dim 1 to get [1, total_len, 2048]
+    let text_mask = Tensor::cat(&text_mask_parts, 1)?; // [1, total_len, 2048]
+    let feat_embeds = Tensor::cat(&feat_embed_parts, 1)?; // [1, total_len, 2048]
+
+    // ── 7. Build combined_embed ──
+    // text_embed = embed_tokens(combined_ids) * scale_emb
+    // Convert to F32 to match mask/feat_embeds dtype (text_mask is F32).
+    // The AR function will convert to model dtype (BF16) before TSLM prefill.
+    let combined_ids_t = Tensor::from_slice(&combined_ids, &[1, total_len], dev)?
+        .to_dtype(DType::I64)?;
+    let text_embed = tslm.embed_text(&combined_ids_t)?
+        .to_dtype(DType::F32)?; // [1, total_len, 2048] F32
+
+    // combined = text_mask * text_embed + (1 - text_mask) * feat_embeds
+    let audio_mask = (text_mask.ones_like()? - &text_mask)?;
+    let text_part = (text_mask * text_embed)?;
+    let audio_part = (audio_mask * &feat_embeds)?;
+    let combined_embeds = text_part.add(&audio_part)?;
+
+    let elapsed = end_time.elapsed();
+    eprintln!(
+        "  [clone] prefix ready: dims [1, {total_len}, 2048] in {elapsed:.2?}"
+    );
+
+    Ok(RefPrefixResult {
+        combined_ids: combined_ids_t,
+        combined_embeds,
+        feat_embeds,
+        n_patches,
+    })
 }
 
 fn build_voice_design_text(text: &str, voice_design: Option<&str>) -> String {

@@ -65,7 +65,12 @@ impl Default for VoxApp {
                 ..Default::default()
             },
             clone_tab: CloneTab {
+                text: "這是語音克隆測試。".into(),
                 output_path: "output/gui_clone.wav".into(),
+                cfg: 2.5,
+                steps: 30,
+                similarity: 1.0,
+                t_scheduler: "uniform".into(),
                 ..Default::default()
             },
             output_tab: OutputTab {
@@ -137,11 +142,13 @@ impl eframe::App for VoxApp {
                     self.output_tab.audio_samples = samples;
                     self.output_tab.audio_sample_rate = sample_rate;
                     self.synth_tab.generate_disabled = false;
+                    self.clone_tab.generate_disabled = false;
                     self.active_tab = Tab::Output;
                 }
                 GuiEvent::Failed(e) => {
                     self.diagnostics_tab.log.push(e.clone());
                     self.synth_tab.generate_disabled = false;
+                    self.clone_tab.generate_disabled = false;
                 }
             }
         }
@@ -178,7 +185,21 @@ impl eframe::App for VoxApp {
                     }
                 }
                 Tab::Cloning => {
-                    self.clone_tab.ui(ui);
+                    self.clone_tab.ui(
+                        ui,
+                        &self.model_tab.model_dir,
+                        &self.model_tab.device_str,
+                        &self.cancel_flag,
+                    );
+
+                    // Check for pending clone generate
+                    if let Some(req) = self.clone_tab.pending_generate.take() {
+                        self.cancel_flag.store(false, Ordering::SeqCst);
+                        let _ = self.tx.send(GuiCommand::Generate(req));
+                        self.diagnostics_tab
+                            .log
+                            .push("Voice clone generation started...".into());
+                    }
                 }
                 Tab::Output => {
                     self.output_tab.ui(ui);
