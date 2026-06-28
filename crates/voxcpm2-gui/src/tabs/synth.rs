@@ -17,6 +17,8 @@ pub struct SynthTab {
     pub voice_design: String,
     pub dry_run: bool,
     pub generate_disabled: bool,
+    pub t_scheduler: String,
+    pub latent_norm_scale: Option<f64>,
     /// Set to Some(true) when user clicks generate.
     pub pending_generate: Option<SynthRequest>,
 }
@@ -91,6 +93,8 @@ impl SynthTab {
                     dry_run: self.dry_run,
                     label_ai_generated: true,
                     max_autoregressive_steps: None,
+                    t_scheduler: self.t_scheduler.clone(),
+                    latent_norm_scale: self.latent_norm_scale,
                 };
                 self.pending_generate = Some(req);
                 self.generate_disabled = true;

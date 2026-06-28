@@ -32,6 +32,10 @@ enum Command {
         voice_design: Option<String>,
         #[arg(long)]
         gain: Option<f32>,
+        #[arg(long, default_value = "uniform")]
+        t_scheduler: String,
+        #[arg(long)]
+        latent_norm: Option<f64>,
         #[arg(long)]
         dry_run: bool,
         #[arg(long, default_value_t = true)]
@@ -73,6 +77,8 @@ fn main() -> anyhow::Result<()> {
             gain,
             dry_run,
             label_ai_generated,
+            t_scheduler,
+            latent_norm,
         } => {
             let mut pipe = VoxPipeline::new(&device, model_dir.as_deref(), dry_run)?;
             let req = SynthRequest {
@@ -88,6 +94,8 @@ fn main() -> anyhow::Result<()> {
                 post_gain: gain,
                 dry_run,
                 label_ai_generated,
+                t_scheduler,
+                latent_norm_scale: latent_norm,
             };
             let result = pipe.synthesize(&req, None)?;
             println!("{}", serde_json::to_string_pretty(&result)?);

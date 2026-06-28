@@ -369,11 +369,13 @@ mod tests {
             num_layers: 2,
             kv_channels: 64,
             mean_mode: false,
+            latent_norm_scale: None,
             cfm_config: crate::config::CfmConfig {
                 sigma_min: 1e-6,
                 solver: "euler".into(),
                 t_scheduler: "uniform".into(),
                 inference_cfg_rate: 2.0,
+                ..Default::default()
             },
         };
         let vb = candle_nn::VarBuilder::zeros(DType::F32, &dev);

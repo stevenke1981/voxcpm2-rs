@@ -96,6 +96,12 @@ pub struct DitConfig {
     pub kv_channels: usize,
     pub mean_mode: bool,
     pub cfm_config: CfmConfig,
+    /// Optional latent normalization scale before AudioVAE decode.
+    /// When set, the CFM latent is multiplied by this factor to better match
+    /// the Python reference distribution (Rust std ~1.60 vs Python ~1.26).
+    /// Recommended: 0.7875 (= 1.26 / 1.60) to match Python latent scale.
+    #[serde(default)]
+    pub latent_norm_scale: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +110,28 @@ pub struct CfmConfig {
     pub solver: String,
     pub t_scheduler: String,
     pub inference_cfg_rate: f64,
+    /// Log-normal scheduler mean (default -1.0).
+    #[serde(default = "default_lognorm_mean")]
+    pub t_scheduler_mean: f64,
+    /// Log-normal scheduler std (default 0.6).
+    #[serde(default = "default_lognorm_std")]
+    pub t_scheduler_std: f64,
+}
+
+fn default_lognorm_mean() -> f64 { -1.0 }
+fn default_lognorm_std() -> f64 { 0.6 }
+
+impl Default for CfmConfig {
+    fn default() -> Self {
+        Self {
+            sigma_min: 1e-6,
+            solver: "euler".into(),
+            t_scheduler: "uniform".into(),
+            inference_cfg_rate: 2.5,
+            t_scheduler_mean: -1.0,
+            t_scheduler_std: 0.6,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

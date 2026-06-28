@@ -132,7 +132,13 @@ pub fn generate_autoregressive(
     let sigma_min = config.dit_config.cfm_config.sigma_min;
     let solver = &config.dit_config.cfm_config.solver;
     let mean_mode = config.dit_config.mean_mode;
-    let mut cfm = UnifiedCFM::new(dit, cfg_rate, sigma_min, solver, feat_dim, mean_mode);
+    let t_scheduler = &config.dit_config.cfm_config.t_scheduler;
+    let t_scheduler_mean = config.dit_config.cfm_config.t_scheduler_mean;
+    let t_scheduler_std = config.dit_config.cfm_config.t_scheduler_std;
+    let mut cfm = UnifiedCFM::new(
+        dit, cfg_rate, sigma_min, solver, feat_dim, mean_mode,
+        t_scheduler, t_scheduler_mean, t_scheduler_std,
+    );
     let lm_to_dit = candle_nn::linear(
         2048,
         config.dit_config.hidden_dim,

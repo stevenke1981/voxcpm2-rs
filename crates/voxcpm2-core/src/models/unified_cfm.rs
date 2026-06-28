@@ -11,6 +11,45 @@ use rand::Rng;
 use rand::SeedableRng;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Inverse error function (Abramowitz & Stegun approximation, max error ~1e-4).
+/// Used for log-norm timestep computation.
+fn erfinv(x: f64) -> f64 {
+    let sign = if x < 0.0 { -1.0 } else { 1.0 };
+    let x = x.abs();
+    if x >= 1.0 {
+        return sign * f64::INFINITY;
+    }
+    let a = 0.147;
+    let ln1mx2 = (1.0 - x * x).ln();
+    let part = 2.0 / (std::f64::consts::PI * a) + ln1mx2 / 2.0;
+    let sqrt_part = (part * part - ln1mx2 / a).sqrt();
+    sign * (sqrt_part - part).sqrt()
+}
+
+/// Compute log-norm timesteps: concentrates steps near t=0 (high-curvature region).
+/// This is the default scheduler used in modern Flow Matching implementations.
+fn lognorm_timesteps(n: usize, mean: f64, std: f64) -> Vec<f64> {
+    let mut ts: Vec<f64> = (0..=n)
+        .map(|i| {
+            let u = i as f64 / n as f64; // 0.0 to 1.0
+            let z = mean + std * 2.0_f64.sqrt() * erfinv(2.0 * u - 1.0);
+            1.0 / (1.0 + (-z).exp()) // sigmoid
+        })
+        .collect();
+    ts.reverse(); // 1 → 0
+    ts
+}
+
+/// Compute uniform+sway timesteps (original VoxCPM2 default).
+fn uniform_sway_timesteps(n: usize, sway_coef: f64) -> Vec<f64> {
+    (0..=n)
+        .map(|i| {
+            let t = 1.0 - i as f64 / n as f64;
+            t + sway_coef * ((std::f64::consts::FRAC_PI_2 * t).cos() - 1.0 + t)
+        })
+        .collect()
+}
+
 fn save_flat_tensor(t: &Tensor, prefix: &str) -> Result<()> {
     let flat = t.flatten_all()?.to_vec1::<f32>()?;
     let path = format!("{prefix}.f32");
@@ -27,10 +66,16 @@ pub struct UnifiedCFM {
     pub feat_dim: usize,
     pub target_dtype: DType,
     pub mean_mode: bool,
+    pub t_scheduler: String,
+    pub t_scheduler_mean: f64,
+    pub t_scheduler_std: f64,
 }
 
 impl UnifiedCFM {
-    pub fn new(estimator: LocDiT, cfg_rate: f64, sigma_min: f64, solver: &str, feat_dim: usize, mean_mode: bool) -> Self {
+    pub fn new(
+        estimator: LocDiT, cfg_rate: f64, sigma_min: f64, solver: &str, feat_dim: usize,
+        mean_mode: bool, t_scheduler: &str, t_scheduler_mean: f64, t_scheduler_std: f64,
+    ) -> Self {
         let target_dtype = estimator.in_proj.weight().dtype();
         Self {
             estimator,
@@ -40,6 +85,9 @@ impl UnifiedCFM {
             feat_dim,
             target_dtype,
             mean_mode,
+            t_scheduler: t_scheduler.to_string(),
+            t_scheduler_mean,
+            t_scheduler_std,
         }
     }
 
@@ -122,16 +170,16 @@ impl UnifiedCFM {
         // 用 seed 確保可重現性
         let z = self.make_randn(&[batch, feat_dim, patch_size], seed, &dev)?;
 
-        // 時間步長（均勻分布，從 1 → 0）
-        // Python: t_span = linspace(1, 0, n_timesteps+1), then sway_sampling
-        //   t_span = t_span + sway_coef * (cos(π/2 * t_span) - 1 + t_span)
-        let t_span: Vec<f64> = (0..=n_timesteps)
-            .map(|i| {
-                let t = 1.0 - i as f64 / n_timesteps as f64;
-                // sway_sampling_coef=1.0 (from Python default)
-                t + 1.0 * ((std::f64::consts::FRAC_PI_2 * t).cos() - 1.0 + t)
-            })
-            .collect();
+        // 時間步長（從 1 → 0）
+        // 支援兩種 scheduler：
+        //   "log-norm" — 集中步數在 t≈0（高曲率區域），mean=-1.0, std=0.6 為預設
+        //   "uniform" — 均勻分布 + sway_sampling（原始 VoxCPM2 行為）
+        let t_span: Vec<f64> = if self.t_scheduler == "log-norm" {
+            lognorm_timesteps(n_timesteps, self.t_scheduler_mean, self.t_scheduler_std)
+        } else {
+            // Default: uniform + sway sampling (coef=1.0 matches Python default)
+            uniform_sway_timesteps(n_timesteps, 1.0)
+        };
 
         self.solve_euler(z, &t_span, mu, cond, cfg_value, cancel)
     }
