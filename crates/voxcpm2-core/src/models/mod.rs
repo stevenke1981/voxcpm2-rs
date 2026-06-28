@@ -1,15 +1,20 @@
 pub mod attention;
 pub mod audio_vae;
 pub mod feat_encoder;
+pub mod fsq_layer;
 pub mod loc_dit;
 pub mod loc_enc;
 pub mod mlp;
 pub mod ralm;
 pub mod rms_norm;
 pub mod rope;
+pub mod stop_head;
 pub mod tslm;
+pub mod unified_cfm;
 
 pub use attention::GQAAttention;
+pub use fsq_layer::FsqLayer;
+pub use stop_head::StopHead;
 pub use audio_vae::*;
 pub use feat_encoder::*;
 pub use loc_dit::*;
@@ -19,3 +24,4 @@ pub use ralm::*;
 pub use rms_norm::RMSNorm;
 pub use rope::RoPE;
 pub use tslm::*;
+pub use unified_cfm::UnifiedCFM;

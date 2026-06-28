@@ -25,6 +25,14 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         steps: usize,
         #[arg(long)]
+        max_ar_steps: Option<usize>,
+        #[arg(long)]
+        seed: Option<u64>,
+        #[arg(long)]
+        voice_design: Option<String>,
+        #[arg(long)]
+        gain: Option<f32>,
+        #[arg(long)]
         dry_run: bool,
         #[arg(long, default_value_t = true)]
         label_ai_generated: bool,
@@ -59,6 +67,10 @@ fn main() -> anyhow::Result<()> {
             device,
             cfg,
             steps,
+            max_ar_steps,
+            seed,
+            voice_design,
+            gain,
             dry_run,
             label_ai_generated,
         } => {
@@ -70,10 +82,14 @@ fn main() -> anyhow::Result<()> {
                 device,
                 cfg_value: cfg,
                 inference_timesteps: steps,
+                max_autoregressive_steps: max_ar_steps,
+                seed,
+                voice_design,
+                post_gain: gain,
                 dry_run,
                 label_ai_generated,
             };
-            let result = pipe.synthesize(&req)?;
+            let result = pipe.synthesize(&req, None)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Command::Inspect { model_dir, hash } => {

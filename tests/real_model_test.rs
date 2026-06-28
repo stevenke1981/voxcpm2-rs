@@ -113,16 +113,23 @@ fn test_full_pipeline_smoke() -> anyhow::Result<()> {
     // For now, use a dummy cond with feat_dim (64) since cond_proj expects 64-dim.
     // In the real pipeline, the 1024-dim text cond needs further processing to 64-dim.
     let feat_dim = config.feat_dim;
+    let hidden_dim = config.dit_config.hidden_dim;
     let seq_len = tokens.len();
     let cond_dit = Tensor::zeros(&[1, seq_len, feat_dim], DType::F32, &dev)?;
 
-    let sched = FlowMatchingScheduler::from_config(&config.dit_config.cfm_config);
-    let mut dit = LocDiT::load(&vb.pp("feat_decoder"), &config.dit_config, feat_dim, sched)?;
+    let mut dit = LocDiT::load(&vb.pp("feat_decoder"), &config.dit_config, feat_dim)?;
 
-    // This is a placeholder — the actual DiT generate call would be:
-    // let latent = dit.generate(&cond_dit, 10, Some(42))?;
-    // assert_eq!(latent.dims(), &[1, feat_dim, seq_len]);
+    // Test the estimator forward with a single patch
+    let patch_size = 4;
+    let x = Tensor::randn(0.0f32, 1.0, &[1, feat_dim, patch_size], &dev)?;
+    // mu = dit_hidden (2 * hidden_dim)
+    let mu = Tensor::randn(0.0f32, 1.0, &[1, 2 * hidden_dim], &dev)?;
+    let t = Tensor::full(0.5f32, &[1], &dev)?;
+    let cond = Tensor::randn(0.0f32, 1.0, &[1, feat_dim, patch_size], &dev)?;
+    let dt = Tensor::full(0.1f32, &[1], &dev)?;
+    let out = dit.forward(&x, &mu, &t, &cond, &dt)?;
+    assert_eq!(out.dims(), &[1, feat_dim, patch_size], "LocDiT forward shape");
 
-    println!("Pipeline structure OK (DiT generate not yet wired for full inference)");
+    println!("Pipeline structure OK (LocDiT forward shape verified)");
     Ok(())
 }

@@ -4,3 +4,6 @@ rustflags = []
 [env]
 RUST_BACKTRACE = "1"
 RUST_LOG = "info"
+# NVCC_CCBIN tells bindgen_cuda (used by candle-kernels) where cl.exe lives.
+# Set this to your MSVC HostX64/x64 bin directory.
+NVCC_CCBIN = "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\Hostx64\\x64"

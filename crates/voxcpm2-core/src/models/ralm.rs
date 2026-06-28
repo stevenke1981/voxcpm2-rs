@@ -55,11 +55,12 @@ impl RalmLayer {
     }
 
     /// 使用無 RoPE 的 attention。
-    pub fn forward(&mut self, x: &Tensor, _step: usize) -> Result<Tensor> {
+    /// `causal`: apply causal mask (true for initial forward, false for auto-regressive steps)
+    pub fn forward(&mut self, x: &Tensor, _step: usize, causal: bool) -> Result<Tensor> {
         let residual = x;
         let h = self.input_layernorm.forward(x)?;
         // 實際上呼叫 forward_no_rope（跳過 RoPE）
-        let h = self.forward_no_rope(&h)?;
+        let h = self.forward_no_rope(&h, causal)?;
         let h = (residual + h)?;
 
         let residual = h.clone();
@@ -69,13 +70,14 @@ impl RalmLayer {
         Ok(h)
     }
 
-    /// Attention forward without RoPE.
-    /// Uses the standard attention but with a simple identity-style RoPE
-    /// (cos=1, sin=0) so no positional information is added.
-    fn forward_no_rope(&mut self, x: &Tensor) -> Result<Tensor> {
+    /// Attention forward without RoPE (with KV cache support).
+    ///
+    /// Uses manual attention with KV cache so autoregressive steps can
+    /// attend to all previous tokens even when given only the current token.
+    /// `causal`: apply causal mask for initial full-sequence forward.
+    fn forward_no_rope(&mut self, x: &Tensor, causal: bool) -> Result<Tensor> {
         let (b, seq_len, _) = x.shape().dims3()?;
 
-        // Manual attention without RoPE:
         // q/k/v projections
         let q = self.self_attn.q_proj.forward(x)?; // [b, seq_len, num_heads * head_dim]
         let k = self.self_attn.k_proj.forward(x)?;
@@ -89,31 +91,64 @@ impl RalmLayer {
         let k = k.reshape((b, seq_len, num_kv_heads, head_dim))?;
         let v = v.reshape((b, seq_len, num_kv_heads, head_dim))?;
 
+        // KV cache: concat new k/v with cached (No RoPE applied)
+        let (k, v) = if let Some(cache) = &mut self.self_attn.kv_cache {
+            // Use the KVCache's append method
+            // Need to flatten k/v first since KVCache works at [b, seq, dim] level
+            let k_flat = k.reshape((b, seq_len, num_kv_heads * head_dim))?;
+            let v_flat = v.reshape((b, seq_len, num_kv_heads * head_dim))?;
+            let (k_new, v_new) = cache.append(&k_flat, &v_flat, 0)?;
+            // Reshape back
+            let k_new = k_new.reshape((b, k_new.dim(1)?, num_kv_heads, head_dim))?;
+            let v_new = v_new.reshape((b, v_new.dim(1)?, num_kv_heads, head_dim))?;
+            (k_new, v_new)
+        } else {
+            (k, v)
+        };
+        let full_seq_len = k.dim(1)?;
+
         // GQA expand
         let group_size = num_heads / num_kv_heads;
         let k = k
             .unsqueeze(3)?
-            .expand((b, seq_len, num_kv_heads, group_size, head_dim))?;
-        let k = k.reshape((b, seq_len, num_heads, head_dim))?;
+            .expand((b, full_seq_len, num_kv_heads, group_size, head_dim))?;
+        let k = k.reshape((b, full_seq_len, num_heads, head_dim))?;
         let v = v
             .unsqueeze(3)?
-            .expand((b, seq_len, num_kv_heads, group_size, head_dim))?;
-        let v = v.reshape((b, seq_len, num_heads, head_dim))?;
+            .expand((b, full_seq_len, num_kv_heads, group_size, head_dim))?;
+        let v = v.reshape((b, full_seq_len, num_heads, head_dim))?;
 
         // Scaled dot-product attention
-        let q = q.transpose(1, 2)?;
-        let k = k.transpose(1, 2)?;
-        let v = v.transpose(1, 2)?;
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
 
         let scale = (head_dim as f64).sqrt().recip();
-        let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+        let mut attn_weights = (q.matmul(&k.transpose(2, 3)?.contiguous()?)? * scale)?;
+
+        // Apply causal mask if needed
+        if causal && seq_len > 1 && seq_len == full_seq_len {
+            let n = seq_len;
+            let mut mask_vals = vec![0.0f32; n * n];
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    mask_vals[i * n + j] = -1e10;
+                }
+            }
+            let mask = Tensor::from_slice(&mask_vals, &[n, n], x.device())?;
+            let mask = mask.unsqueeze(0)?.unsqueeze(0)?;
+            let mask = mask.to_dtype(attn_weights.dtype())?;
+            attn_weights = attn_weights.broadcast_add(&mask)?;
+        }
+
         let attn_weights = candle_nn::ops::softmax(&attn_weights, 3)?;
         let attn_output = attn_weights.matmul(&v)?;
 
         let attn_output =
             attn_output
                 .transpose(1, 2)?
-                .reshape((b, seq_len, num_heads * head_dim))?;
+                .reshape((b, seq_len, num_heads * head_dim))?
+                .contiguous()?;
         self.self_attn.o_proj.forward(&attn_output)
     }
 }
@@ -147,8 +182,24 @@ impl RALM {
 
     pub fn forward(&mut self, x: &Tensor, step: usize) -> Result<Tensor> {
         let mut h = x.clone();
+        let causal = true; // RALM initial forward uses causal attention
         for layer in self.layers.iter_mut() {
-            h = layer.forward(&h, step)?;
+            h = layer.forward(&h, step, causal)?;
+        }
+        self.norm.forward(&h)
+    }
+
+    /// Single-token forward step with pre-computed embedding.
+    ///
+    /// 對應自回歸迴圈中 `RALM(inputs_embeds=fusion, ...)`：
+    /// - 輸入 embedding `[B, 1, hidden_size]`（fusion_concat_proj 輸出）
+    /// - 透過所有 8 層 RALM（無 RoPE，使用 KV cache）
+    /// - 回傳 `[B, 1, hidden_size]`
+    pub fn forward_step(&mut self, input_embeds: &Tensor, step: usize) -> Result<Tensor> {
+        let mut h = input_embeds.clone();
+        let causal = false; // forward_step only has 1 token; KV cache handles causality
+        for layer in self.layers.iter_mut() {
+            h = layer.forward(&h, step, causal)?;
         }
         self.norm.forward(&h)
     }

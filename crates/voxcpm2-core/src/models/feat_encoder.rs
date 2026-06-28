@@ -130,12 +130,13 @@ impl FeatEncoderLayer {
             .reshape((b, seq_len, num_heads, head_dim))?;
 
         // Transpose to [b, num_heads, seq_len, head_dim]
-        let q = q.transpose(1, 2)?;
-        let k = k.transpose(1, 2)?;
-        let v = v.transpose(1, 2)?;
+        // CUDA (cublas) requires contiguous tensors for matmul
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
 
         let scale = (head_dim as f64).sqrt().recip();
-        let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+        let attn_weights = (q.matmul(&k.transpose(2, 3)?.contiguous()?)? * scale)?;
         let attn_weights = candle_nn::ops::softmax(&attn_weights, 3)?;
         let attn_output = attn_weights.matmul(&v)?;
 
@@ -143,7 +144,8 @@ impl FeatEncoderLayer {
         let attn_output =
             attn_output
                 .transpose(1, 2)?
-                .reshape((b, seq_len, num_heads * head_dim))?;
+                .reshape((b, seq_len, num_heads * head_dim))?
+                .contiguous()?;
 
         self.self_attn.o_proj.forward(&attn_output)
     }

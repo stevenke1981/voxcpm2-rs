@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod audio;
+pub mod autoregressive;
 pub mod config;
 pub mod device;
 pub mod models;

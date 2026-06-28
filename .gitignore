@@ -7,3 +7,8 @@
 *.manifest.json
 inspect_*.json
 .DS_Store
+*.npy
+*.f32
+/data/
+test_out.txt
+ct_test_*

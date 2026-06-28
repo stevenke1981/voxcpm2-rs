@@ -36,7 +36,8 @@ impl RoPE {
             inv_freq.push(val);
         }
 
-        // LongRoPE 縮放
+        // LongRoPE 縮放 — Python: inv_freq[i] / factor[i], so we divide
+        // Python: freqs = outer(t, 1/factor) * inv_freq = t * inv_freq[i] / factor[i]
         if let Some(factors) = factors {
             assert_eq!(
                 factors.len(),
@@ -44,7 +45,7 @@ impl RoPE {
                 "LongRoPE factor length must equal head_dim/2"
             );
             for (f, factor) in inv_freq.iter_mut().zip(factors) {
-                *f *= factor;
+                *f /= factor;  // INV factor to match Python convention
             }
         }
 

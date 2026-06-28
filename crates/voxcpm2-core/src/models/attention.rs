@@ -116,7 +116,11 @@ impl GQAAttention {
 
     /// Forward: 輸入 x shape [batch, seq_len, hidden_size]
     /// 回傳: [batch, seq_len, hidden_size]
-    pub fn forward(&mut self, x: &Tensor, rope: &RoPE, step: usize) -> Result<Tensor> {
+    /// `causal`: apply causal (triangular) mask to prevent attending to future positions.
+    ///   - TSLM initial forward: causal=true (full sequence at once)
+    ///   - TSLM forward_step: causal=false (only 1 new token, KV cache handles causality)
+    ///   - DiT forward: causal=false (bidirectional)
+    pub fn forward(&mut self, x: &Tensor, rope: &RoPE, step: usize, causal: bool) -> Result<Tensor> {
         let (b, seq_len, _) = x.shape().dims3()?;
 
         // Projections
@@ -165,20 +169,42 @@ impl GQAAttention {
         // Scaled dot-product attention
         // q, k, v all: [b, seq_len/full_seq_len, num_heads, head_dim]
         // Transpose to [b, num_heads, seq_len, head_dim]
-        let q = q.transpose(1, 2)?;
-        let k = k.transpose(1, 2)?;
-        let v = v.transpose(1, 2)?;
+        // CUDA (cublas) requires contiguous tensors, so call .contiguous() after transpose
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
 
         let scale = (self.head_dim as f64).sqrt().recip();
-        let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+        let mut attn_weights = (q.matmul(&k.transpose(2, 3)?.contiguous()?)? * scale)?; // [b, num_heads, seq_len, full_seq_len]
+
+        // Apply causal mask: mask future positions with -inf
+        // This is needed for TSLM initial forward (process all tokens at once).
+        // For forward_step (seq_len=1) and DiT (bidirectional), causal=false.
+        if causal && seq_len > 1 && seq_len == full_seq_len {
+            // Lower triangular: position i can attend to j <= i
+            let n = seq_len;
+            let mut mask_vals = vec![0.0f32; n * n];
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    mask_vals[i * n + j] = -1e10;
+                }
+            }
+            let mask = Tensor::from_slice(&mask_vals, &[n, n], x.device())?;
+            let mask = mask.unsqueeze(0)?.unsqueeze(0)?; // [1, 1, n, n]
+            let mask = mask.to_dtype(attn_weights.dtype())?;
+            attn_weights = attn_weights.broadcast_add(&mask)?;
+        }
+
         let attn_weights = candle_nn::ops::softmax(&attn_weights, 3)?;
         let attn_output = attn_weights.matmul(&v)?; // [b, num_heads, seq_len, head_dim]
 
         // Transpose back and reshape
+        // Contiguous required for o_proj matmul on CUDA
         let attn_output =
             attn_output
                 .transpose(1, 2)?
-                .reshape((b, seq_len, self.num_heads * self.head_dim))?;
+                .reshape((b, seq_len, self.num_heads * self.head_dim))?
+                .contiguous()?;
 
         // Output projection
         self.o_proj.forward(&attn_output)
@@ -217,7 +243,7 @@ mod tests {
             &dev,
         )?;
         let x = Tensor::zeros(&[1, seq_len, hidden], DType::F32, &dev)?;
-        let y = attn.forward(&x, &rope, 0)?;
+        let y = attn.forward(&x, &rope, 0, true)?;
         assert_eq!(y.dims(), &[1, seq_len, hidden]);
         Ok(())
     }

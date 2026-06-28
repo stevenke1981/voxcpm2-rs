@@ -1,15 +1,18 @@
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use eframe::egui;
-use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
-use std::{
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread,
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
+use std::{path::PathBuf, thread};
 use voxcpm2_core::{SynthRequest, VoxPipeline};
+
+mod tabs;
+use tabs::clone::CloneTab;
+use tabs::model::ModelTab;
+use tabs::output::OutputTab;
+use tabs::synth::SynthTab;
+use tabs::{diagnostics::DiagnosticsTab, Tab};
 
 #[derive(Debug)]
 enum GuiCommand {
@@ -18,7 +21,6 @@ enum GuiCommand {
 
 #[derive(Debug)]
 enum GuiEvent {
-    Log(String),
     Finished {
         path: PathBuf,
         samples: Vec<f32>,
@@ -28,61 +30,71 @@ enum GuiEvent {
 }
 
 struct VoxApp {
-    model_dir: String,
-    text: String,
-    output: String,
-    device: String,
-    cfg: f32,
-    steps: usize,
-    dry_run: bool,
-    log: Vec<String>,
-    is_playing: Arc<AtomicBool>,
-    /// Decoded audio samples (last generated).
-    audio_samples: Vec<f32>,
-    audio_sample_rate: u32,
+    active_tab: Tab,
+    model_tab: ModelTab,
+    synth_tab: SynthTab,
+    clone_tab: CloneTab,
+    output_tab: OutputTab,
+    diagnostics_tab: DiagnosticsTab,
     tx: Sender<GuiCommand>,
     rx: Receiver<GuiEvent>,
+    cancel_flag: Arc<AtomicBool>,
 }
 
 impl Default for VoxApp {
     fn default() -> Self {
         let (cmd_tx, cmd_rx) = unbounded::<GuiCommand>();
         let (evt_tx, evt_rx) = unbounded::<GuiEvent>();
-        let playing_flag = Arc::new(AtomicBool::new(false));
-        let flag = playing_flag.clone();
-        thread::spawn(move || worker_loop(cmd_rx, evt_tx, flag));
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        thread::spawn({
+            let cancel_flag = cancel_flag.clone();
+            move || worker_loop(cmd_rx, evt_tx, cancel_flag)
+        });
         Self {
-            model_dir: "models/VoxCPM2".into(),
-            text: "你好，這是 VoxCPM2 Rust Candle egui 測試。".into(),
-            output: "output/gui_smoke.wav".into(),
-            device: "auto".into(),
-            cfg: 2.0,
-            steps: 10,
-            dry_run: true,
-            log: vec!["Ready".into()],
-            is_playing: playing_flag,
-            audio_samples: vec![],
-            audio_sample_rate: 48000,
+            active_tab: Tab::Synthesis,
+            model_tab: ModelTab {
+                model_dir: "models/VoxCPM2".into(),
+                device_str: "auto".into(),
+                ..Default::default()
+            },
+            synth_tab: SynthTab {
+                text: "你好，這是 VoxCPM2 Rust Candle egui 測試。".into(),
+                output_path: "output/gui_synth.wav".into(),
+                cfg: 2.0,
+                steps: 10,
+                ..Default::default()
+            },
+            clone_tab: CloneTab {
+                output_path: "output/gui_clone.wav".into(),
+                ..Default::default()
+            },
+            output_tab: OutputTab {
+                output_path: "output/gui_synth.wav".into(),
+                ..Default::default()
+            },
+            diagnostics_tab: DiagnosticsTab::default(),
             tx: cmd_tx,
             rx: evt_rx,
+            cancel_flag,
         }
     }
 }
 
-fn worker_loop(rx: Receiver<GuiCommand>, tx: Sender<GuiEvent>, playing: Arc<AtomicBool>) {
+fn worker_loop(rx: Receiver<GuiCommand>, tx: Sender<GuiEvent>, cancel_flag: Arc<AtomicBool>) {
     while let Ok(cmd) = rx.recv() {
+        // Reset cancel flag for each new command
+        cancel_flag.store(false, Ordering::SeqCst);
+
         match cmd {
             GuiCommand::Generate(req) => {
-                let _ = tx.send(GuiEvent::Log("Generating...".into()));
                 let result = (|| -> anyhow::Result<(PathBuf, Vec<f32>, u32)> {
-                    let mut pipe =
-                        VoxPipeline::new(&req.device, req.model_dir.as_deref(), req.dry_run)?;
-                    let out = pipe.synthesize(&req)?;
+                    let dry_run = req.dry_run;
+                    let mut pipe = VoxPipeline::new(&req.device, req.model_dir.as_deref(), dry_run)?;
+                    let out = pipe.synthesize(&req, Some(&cancel_flag))?;
                     let sr = out.sample_rate;
 
-                    // Load WAV for playback
+                    // Read WAV for playback
                     let mut reader = hound::WavReader::open(&out.output_path)?;
-                    let _spec = reader.spec();
                     let samples: Vec<f32> = reader
                         .samples::<i16>()
                         .filter_map(|s| s.ok())
@@ -90,19 +102,15 @@ fn worker_loop(rx: Receiver<GuiCommand>, tx: Sender<GuiEvent>, playing: Arc<Atom
                         .collect();
                     Ok((out.output_path, samples, sr))
                 })();
-                playing.store(false, Ordering::SeqCst);
-                match result {
-                    Ok((path, samples, sr)) => {
-                        let _ = tx.send(GuiEvent::Finished {
-                            path,
-                            samples,
-                            sample_rate: sr,
-                        });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(GuiEvent::Failed(e.to_string()));
-                    }
-                }
+
+                let _ = match result {
+                    Ok((path, samples, sr)) => tx.send(GuiEvent::Finished {
+                        path,
+                        samples,
+                        sample_rate: sr,
+                    }),
+                    Err(e) => tx.send(GuiEvent::Failed(format!("Generation failed: {e}"))),
+                };
             }
         }
     }
@@ -113,21 +121,27 @@ impl eframe::App for VoxApp {
         // ── Process events ──
         while let Ok(evt) = self.rx.try_recv() {
             match evt {
-                GuiEvent::Log(s) => self.log.push(s),
                 GuiEvent::Finished {
                     path,
                     samples,
                     sample_rate,
                 } => {
-                    self.log.push(format!(
-                        "Finished: {} ({}s)",
+                    let msg = format!(
+                        "Finished: {} ({}s, {} samples)",
                         path.display(),
-                        samples.len() / sample_rate as usize
-                    ));
-                    self.audio_samples = samples;
-                    self.audio_sample_rate = sample_rate;
+                        samples.len() / sample_rate as usize,
+                        samples.len()
+                    );
+                    self.diagnostics_tab.log.push(msg);
+                    self.output_tab.audio_samples = samples;
+                    self.output_tab.audio_sample_rate = sample_rate;
+                    self.synth_tab.generate_disabled = false;
+                    self.active_tab = Tab::Output;
                 }
-                GuiEvent::Failed(e) => self.log.push(format!("Error: {e}")),
+                GuiEvent::Failed(e) => {
+                    self.diagnostics_tab.log.push(e.clone());
+                    self.synth_tab.generate_disabled = false;
+                }
             }
         }
 
@@ -135,159 +149,51 @@ impl eframe::App for VoxApp {
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("VoxCPM2 Rust Candle");
-                ui.label(format!("device: {}", self.device));
-                ui.checkbox(&mut self.dry_run, "dry-run smoke");
+                Tab::ui_bar(ui, &mut self.active_tab);
             });
         });
 
-        // ── Central panel ──
+        // ── Content area ──
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Synthesis");
-            ui.horizontal(|ui| {
-                ui.label("Model dir");
-                ui.text_edit_singleline(&mut self.model_dir);
-                if ui.button("Browse").clicked() {
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                        self.model_dir = path.display().to_string();
+            match self.active_tab {
+                Tab::Model => {
+                    self.model_tab.ui(ui);
+                }
+                Tab::Synthesis => {
+                    self.synth_tab.ui(
+                        ui,
+                        &self.model_tab.model_dir,
+                        &self.model_tab.device_str,
+                        &self.cancel_flag,
+                    );
+
+                    // Check for pending generate
+                    if let Some(req) = self.synth_tab.pending_generate.take() {
+                        self.cancel_flag.store(false, Ordering::SeqCst);
+                        let _ = self.tx.send(GuiCommand::Generate(req));
+                        self.diagnostics_tab
+                            .log
+                            .push("Generation started...".into());
                     }
                 }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Output");
-                ui.text_edit_singleline(&mut self.output);
-            });
-            ui.horizontal(|ui| {
-                ui.label("Device");
-                ui.text_edit_singleline(&mut self.device);
-                ui.add(egui::Slider::new(&mut self.cfg, 0.5..=5.0).text("cfg"));
-                ui.add(egui::Slider::new(&mut self.steps, 1..=50).text("steps"));
-            });
-            ui.label("Text / Voice Design");
-            ui.text_edit_multiline(&mut self.text);
-            if ui.button("Generate").clicked() {
-                let req = SynthRequest {
-                    text: self.text.clone(),
-                    model_dir: Some(PathBuf::from(self.model_dir.clone())),
-                    output_path: PathBuf::from(self.output.clone()),
-                    device: self.device.clone(),
-                    cfg_value: self.cfg,
-                    inference_timesteps: self.steps,
-                    dry_run: self.dry_run,
-                    label_ai_generated: true,
-                };
-                let _ = self.tx.send(GuiCommand::Generate(req));
-            }
-
-            // ── Audio playback controls ──
-            let has_audio = !self.audio_samples.is_empty();
-            if has_audio {
-                ui.separator();
-                ui.heading("Playback");
-                ui.horizontal(|ui| {
-                    let playing = self.is_playing.load(Ordering::SeqCst);
-                    let btn_label = if playing { "⏹ Stop" } else { "▶ Play" };
-                    if ui
-                        .add_sized([80.0, 30.0], egui::Button::new(btn_label))
-                        .clicked()
-                    {
-                        if playing {
-                            self.is_playing.store(false, Ordering::SeqCst);
-                        } else {
-                            let samples = self.audio_samples.clone();
-                            let sr = self.audio_sample_rate;
-                            let flag = self.is_playing.clone();
-                            flag.store(true, Ordering::SeqCst);
-                            thread::spawn(move || {
-                                play_audio(&samples, sr, flag);
-                            });
-                        }
-                    }
-                    ui.label(format!(
-                        "{:.1}s @ {}Hz",
-                        self.audio_samples.len() as f64 / self.audio_sample_rate as f64,
-                        self.audio_sample_rate
-                    ));
-                });
-
-                // ── Waveform preview ──
-                let total = self.audio_samples.len();
-                if total > 0 {
-                    let max_f = self
-                        .audio_samples
-                        .iter()
-                        .map(|s| s.abs())
-                        .fold(0.0f32, f32::max)
-                        .max(1e-8);
-                    let painter = ui.painter();
-                    let rect = ui.available_rect_before_wrap();
-                    let w = (rect.width() - 10.0).min(600.0);
-                    let h = 60.0;
-                    let origin = egui::pos2(rect.left() + 5.0, rect.top());
-                    let mut points: Vec<egui::Pos2> = Vec::with_capacity(512);
-                    let step = (total / 512).max(1);
-                    for i in (0..total).step_by(step) {
-                        let x = origin.x + (i as f32 / total as f32) * w;
-                        let y = origin.y + h * 0.5 - (self.audio_samples[i] / max_f) * h * 0.4;
-                        points.push(egui::pos2(x, y));
-                    }
-                    let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 180, 255));
-                    painter.add(egui::Shape::line(points, stroke));
-                    // Reserve space
-                    ui.allocate_space(egui::vec2(w, h));
+                Tab::Cloning => {
+                    self.clone_tab.ui(ui);
+                }
+                Tab::Output => {
+                    self.output_tab.ui(ui);
+                }
+                Tab::Diagnostics => {
+                    self.diagnostics_tab.ui(ui, &self.model_tab.model_dir, &self.model_tab.device_str);
                 }
             }
-
-            // ── Diagnostics ──
-            ui.separator();
-            ui.heading("Diagnostics");
-            egui::ScrollArea::vertical()
-                .max_height(180.0)
-                .show(ui, |ui| {
-                    for line in &self.log {
-                        ui.label(line);
-                    }
-                });
         });
     }
-}
-
-/// Play audio samples using rodio in a background thread.
-fn play_audio(samples: &[f32], sample_rate: u32, playing: Arc<AtomicBool>) {
-    // rodio requires the output stream to live for the duration
-    let (_stream, stream_handle) = match OutputStream::try_default() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Audio output unavailable: {e}");
-            playing.store(false, Ordering::SeqCst);
-            return;
-        }
-    };
-    let sink = match Sink::try_new(&stream_handle) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Audio sink error: {e}");
-            playing.store(false, Ordering::SeqCst);
-            return;
-        }
-    };
-
-    // Convert f32 samples to rodio source
-    let clamped: Vec<f32> = samples.iter().map(|&s| s.clamp(-1.0, 1.0)).collect();
-    let source = SamplesBuffer::new(1, sample_rate, clamped);
-
-    sink.append(source);
-    // Poll until playback stops or user interrupts
-    while !sink.empty() && playing.load(Ordering::SeqCst) {
-        thread::sleep(std::time::Duration::from_millis(50));
-    }
-    sink.stop();
-    playing.store(false, Ordering::SeqCst);
 }
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
-        "VoxCPM2 Rust Candle egui",
+        "VoxCPM2 Rust Candle",
         native_options,
         Box::new(|_cc| Ok(Box::<VoxApp>::default())),
     )

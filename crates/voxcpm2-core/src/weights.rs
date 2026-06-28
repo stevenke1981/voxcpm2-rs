@@ -4,7 +4,7 @@
 //! `audiovae.safetensors` (F32, with weight-norm fusion),
 //! and creating VarBuilders for each model component.
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::VarBuilder;
 use std::collections::HashMap;
 use std::path::Path;
@@ -23,7 +23,8 @@ pub fn load_main_vb<'a>(model_dir: &'a Path, device: &'a Device) -> Result<VarBu
         )));
     }
     let mut tensors = candle_core::safetensors::load(path, device)?;
-    // Convert all BF16 tensors to F32 (CPU doesn't support BF16 matmul).
+    // On CPU we must convert BF16→F32 (CPU matmul lacks BF16 support).
+    // On CUDA we keep BF16 for memory efficiency.
     let use_bf16 = matches!(device, Device::Cuda(_));
     if !use_bf16 {
         for (_, t) in tensors.iter_mut() {
@@ -32,7 +33,8 @@ pub fn load_main_vb<'a>(model_dir: &'a Path, device: &'a Device) -> Result<VarBu
             }
         }
     }
-    Ok(VarBuilder::from_tensors(tensors, DType::F32, device))
+    let default_dtype = if use_bf16 { DType::BF16 } else { DType::F32 };
+    Ok(VarBuilder::from_tensors(tensors, default_dtype, device))
 }
 
 /// Load `audiovae.safetensors` with weight-norm fusion and return a VarBuilder.
@@ -120,6 +122,23 @@ pub fn load_audiovae_decoder_tensors(
     // Keep only decoder.* tensors
     tensors.retain(|k, _| k.starts_with("decoder."));
     Ok(tensors)
+}
+
+/// Project 1024-dim text conditioning to 64-dim feat space.
+///
+/// Uses the transpose of `feat_decoder.estimator.cond_proj.weight` [1024, 64].
+/// The original weight is for Linear(64, 1024). By transposing to [64, 1024] and
+/// creating a Linear(1024, 64), we get a learned projection: y = x @ w^T.
+pub fn project_text_to_feat(
+    cond_text: &Tensor,
+    vb: &VarBuilder<'_>,
+) -> Result<Tensor> {
+    // Load stored weight: [1024, 64] — trained as Linear(64, 1024)
+    let w = vb.get(&[1024, 64], "feat_decoder.estimator.cond_proj.weight")?;
+    // Transpose: [64, 1024] — kernel for Linear(1024, 64)
+    let w_t = w.transpose(0, 1)?;
+    let lin = candle_nn::Linear::new(w_t, None);
+    lin.forward(cond_text)
 }
 
 /// Quick sanity: load model.safetensors and report tensor count.

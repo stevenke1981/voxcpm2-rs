@@ -56,11 +56,11 @@ impl TslmLayer {
         })
     }
 
-    pub fn forward(&mut self, x: &Tensor, rope: &RoPE, step: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, x: &Tensor, rope: &RoPE, step: usize, causal: bool) -> Result<Tensor> {
         // Pre-attention norm
         let residual = x;
         let h = self.input_layernorm.forward(x)?;
-        let h = self.self_attn.forward(&h, rope, step)?;
+        let h = self.self_attn.forward(&h, rope, step, causal)?;
         let h = (residual + h)?;
 
         // Pre-MLP norm
@@ -115,8 +115,12 @@ impl TSLM {
             )?);
         }
 
-        let scale_emb = cfg.scale_emb.unwrap_or(1.0);
-        let scale_depth = cfg.scale_depth.unwrap_or(1.0);
+        // Python: scale_emb is only applied when use_mup=True
+        //   `if not getattr(self.config.lm_config, "use_mup", False): scale_emb = 1.0`
+        let scale_emb = if cfg.use_mup { cfg.scale_emb.unwrap_or(1.0) } else { 1.0 };
+        // Python applies scale_depth per-layer only when use_mup=True.
+        // When use_mup=False (our case), scale_depth is not used at all.
+        let scale_depth = if cfg.use_mup { cfg.scale_depth.unwrap_or(1.0) } else { 1.0 };
 
         Ok(Self {
             embed_tokens,
@@ -137,8 +141,9 @@ impl TSLM {
             h = (h * self.scale_emb)?;
         }
 
+        let causal = true; // TSLM uses causal attention
         for layer in self.layers.iter_mut() {
-            h = layer.forward(&h, &self.rope, step)?;
+            h = layer.forward(&h, &self.rope, step, causal)?;
         }
 
         h = self.norm.forward(&h)?;
@@ -149,10 +154,34 @@ impl TSLM {
         Ok(h)
     }
 
+    /// Single-token forward step with pre-computed embedding (no token lookup).
+    ///
+    /// 對應自回歸迴圈中 `TSLM(inputs_embeds=curr_embed, ...)`：
+    /// - 輸入 embedding `[B, 1, hidden_size]`（來自 feat_encoder 輸出）
+    /// - 透過所有 Transformer 層（使用 KV cache 加速）
+    /// - 回傳 `[B, 1, hidden_size]`
+    pub fn forward_step(&mut self, input_embeds: &Tensor, step: usize) -> Result<Tensor> {
+        let mut h = input_embeds.clone();
+        // muP scaling
+        if self.scale_emb != 1.0 {
+            h = (h * self.scale_emb)?;
+        }
+        let causal = false; // forward_step only has 1 token; KV cache handles causality
+        for layer in self.layers.iter_mut() {
+            h = layer.forward(&h, &self.rope, step, causal)?;
+        }
+        h = self.norm.forward(&h)?;
+        if self.scale_depth != 1.0 {
+            h = (h / self.scale_depth)?;
+        }
+        Ok(h)
+    }
+
     /// LM head: 投影 hidden 到 vocab logits。
     /// 權重綁定（tie weights）— 與 embed_tokens 共享。
     pub fn lm_head(&self, hidden: &Tensor, tied_weight: &Tensor) -> Result<Tensor> {
-        hidden.matmul(&tied_weight.t()?)
+        // CUDA requires contiguous tensor for matmul
+        hidden.matmul(&tied_weight.t()?.contiguous()?)
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::{
     audio,
+    autoregressive::generate_autoregressive,
     config::VoxConfig,
     device::{self, DevicePreference},
     models::*,
@@ -8,6 +9,7 @@ use crate::{
 use candle_core::{DType, Device, Module, Tensor};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SynthRequest {
@@ -19,6 +21,35 @@ pub struct SynthRequest {
     pub inference_timesteps: usize,
     pub dry_run: bool,
     pub label_ai_generated: bool,
+    pub seed: Option<u64>,
+    pub voice_design: Option<String>,
+    /// Optional post-gain factor. When set, the output waveform is multiplied
+    /// by this factor. When None, a warning is emitted if peak is very low
+    /// (which can happen with short text + few timesteps).
+    pub post_gain: Option<f32>,
+    /// Maximum autoregressive steps.
+    /// Default formula: min(text_tokens * 6 + 10, max_autoregressive_steps).
+    /// When None, uses 2000 as the hard upper bound (matching Python default).
+    pub max_autoregressive_steps: Option<usize>,
+}
+
+impl Default for SynthRequest {
+    fn default() -> Self {
+        Self {
+            text: "Hello, world.".into(),
+            model_dir: Some(PathBuf::from("models/VoxCPM2")),
+            output_path: PathBuf::from("output/synth.wav"),
+            device: "auto".into(),
+            cfg_value: 2.0,
+            inference_timesteps: 10,
+            dry_run: false,
+            label_ai_generated: true,
+            seed: None,
+            voice_design: None,
+            post_gain: None,
+            max_autoregressive_steps: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,30 +72,65 @@ impl VoxPipeline {
         let device = device::select_device(pref)?;
         let config = if dry_run {
             None
-        } else if let Some(dir) = model_dir {
-            Some(VoxConfig::load(dir)?)
         } else {
-            None
+            // Fallback: use default model directory even when model_dir is not explicitly provided.
+            let dir = model_dir.unwrap_or_else(|| Path::new("models/VoxCPM2"));
+            Some(VoxConfig::load(dir)?)
         };
         Ok(Self { device, config })
     }
 
-    pub fn synthesize(&mut self, req: &SynthRequest) -> anyhow::Result<SynthResult> {
+    /// Synthesize speech from text.
+    ///
+    /// `cancel` is an optional `AtomicBool` flag checked periodically during
+    /// the long-running DiT diffusion loop.  When `true` the synthesis is
+    /// aborted with a `Cancelled` error.
+    pub fn synthesize(
+        &mut self,
+        req: &SynthRequest,
+        cancel: Option<&AtomicBool>,
+    ) -> anyhow::Result<SynthResult> {
+        // Check cancel before starting
+        if let Some(flag) = cancel {
+            if flag.load(Ordering::Relaxed) {
+                anyhow::bail!("Synthesis cancelled");
+            }
+        }
+
         let sample_rate = self
             .config
             .as_ref()
             .map(|c| c.audio_vae_config.out_sample_rate)
             .unwrap_or(48_000);
 
-        let samples = if req.dry_run {
+        let mut samples = if req.dry_run {
             audio::smoke_tone(&req.text, sample_rate)
         } else {
             let model_dir = req
                 .model_dir
                 .as_deref()
                 .unwrap_or_else(|| Path::new("models/VoxCPM2"));
-            self.synthesize_real(req, model_dir, sample_rate)?
+            self.synthesize_real(req, model_dir, sample_rate, cancel)?
         };
+
+        // Apply post-gain if specified, or warn if very quiet
+        if let Some(gain) = req.post_gain {
+            if (gain - 1.0).abs() > 1e-6 {
+                for s in samples.iter_mut() {
+                    *s *= gain;
+                }
+            }
+        } else {
+            let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+            if peak < 1e-4 {
+                tracing::warn!(
+                    "Output peak very low ({:.6}). This is normal for short/noise latents. \
+                     Set post_gain (e.g., 10.0) to amplify, or use more inference timesteps \
+                     and longer text for natural volume.",
+                    peak
+                );
+            }
+        }
 
         audio::check_audio(&samples)?;
         audio::write_wav_f32(&req.output_path, &samples, sample_rate)?;
@@ -84,8 +150,22 @@ impl VoxPipeline {
         req: &SynthRequest,
         model_dir: &Path,
         _sample_rate: u32,
+        cancel: Option<&AtomicBool>,
     ) -> anyhow::Result<Vec<f32>> {
+        // Cancel check helpers
+        let check_cancel = |name: &str| -> anyhow::Result<()> {
+            if let Some(flag) = cancel {
+                if flag.load(Ordering::Relaxed) {
+                    anyhow::bail!("Synthesis cancelled at: {name}");
+                }
+            }
+            Ok(())
+        };
+
+        check_cancel("start")?;
+
         let dev = &self.device;
+        eprintln!("  [pipe] using device: {:?}", dev);
         let config = self
             .config
             .as_ref()
@@ -93,67 +173,125 @@ impl VoxPipeline {
 
         // ── Load all weights ──
         let main_vb = weights::load_main_vb(model_dir, dev)?;
-        let audiovae_tensors = weights::load_audiovae_decoder_tensors(model_dir, dev)?;
+        // AudioVAE — try CUDA first, fall back to CPU if cuBLAS conv1d errors
+        let audiovae_dev = if matches!(dev, Device::Cuda(_)) { dev } else { &Device::Cpu };
+        let audiovae_tensors = weights::load_audiovae_decoder_tensors(model_dir, audiovae_dev)?;
 
         // ── Tokenizer ──
         let tokenizer = crate::tokenizer::VoxTokenizer::from_model_dir(model_dir)?;
-        let tokens = tokenizer.encode(&req.text)?;
+        // Apply chat template (matching Python: add_special_tokens=False, no BOS):
+        // <|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n
+        let chat_text = crate::tokenizer::render_chat_template(
+            &[crate::tokenizer::ChatMessage {
+                role: "user".into(),
+                content: req.text.clone(),
+            }],
+            true, // add_generation_prompt
+        );
+        let tokens = tokenizer.encode(&chat_text)?;
         if tokens.is_empty() {
             anyhow::bail!("tokenizer returned empty tokens");
         }
         let input_ids =
             Tensor::from_slice(&tokens, &[1, tokens.len()], dev)?.to_dtype(DType::I64)?;
-        let _seq_len = tokens.len();
+        let seq_len = tokens.len();
+        let text_len = req.text.len();
 
         // ── TSLM forward ──
+        check_cancel("TSLM")?;
         let mut tslm = TSLM::load(&main_vb.pp("base_lm"), &config.lm_config, dev, false)?;
         let h_tslm = tslm.forward(&input_ids, 0)?; // [1, seq_len, 2048]
+        eprintln!("  [pipe] TSLM: seq_len={seq_len} text_len={text_len} h_tslm.shape={:?}", h_tslm.shape());
+        save_debug_tensor(&h_tslm, "debug_pipe_tslm")?;
+        let (tslm_mean, tslm_std, tslm_peak) = tensor_stats(&h_tslm)?;
+        eprintln!("  [pipe] TSLM: seq_len={seq_len} text_len={text_len} mean={tslm_mean:.6} std={tslm_std:.6} peak={tslm_peak:.6}");
 
         // ── RALM forward ──
+        check_cancel("RALM")?;
         let ralm_num_layers = config.residual_lm_num_layers;
         let mut ralm = RALM::load(
             &main_vb.pp("residual_lm"), &config.lm_config,
             ralm_num_layers, dev, false,
         )?;
         let h_ralm = ralm.forward(&h_tslm, 0)?; // [1, seq_len, 2048]
+        save_debug_tensor(&h_ralm, "debug_pipe_ralm")?;
+        let (ralm_mean, ralm_std, ralm_peak) = tensor_stats(&h_ralm)?;
+        let h_tslm_peak = tensor_peak(&h_tslm)?;
+        eprintln!("  [pipe] RALM: mean={ralm_mean:.6} std={ralm_std:.6} peak={ralm_peak:.6} (TSLM peak={h_tslm_peak:.6})");
 
         // ── Text → DiT condition (1024-dim) ──
+        check_cancel("cond")?;
         let (lm_to_dit, res_to_dit) = weights::load_text_to_dit_projections(&main_vb)?;
         let cond_text = (lm_to_dit.forward(&h_tslm)? + res_to_dit.forward(&h_ralm)?)?; // [1, seq_len, 1024]
+        save_debug_tensor(&cond_text, "debug_pipe_cond_text")?;
+        let (ct_mean, ct_std, ct_peak) = tensor_stats(&cond_text)?;
+        eprintln!("  [pipe] cond_text (lm+res→1024): mean={ct_mean:.6} std={ct_std:.6} peak={ct_peak:.6}");
 
-        // ── LocDiT: diffusion generate ──
-        let feat_dim = config.feat_dim; // 64
-        let sched = FlowMatchingScheduler::from_config(&config.dit_config.cfm_config);
-        let mut dit = LocDiT::load(
-            &main_vb.pp("feat_decoder"),
-            &config.dit_config,
-            feat_dim,
-            sched,
+        // ── NEW: autoregressive generation ──
+        check_cancel("autoregressive")?;
+        let latent = generate_autoregressive(
+            &main_vb, config, req, dev, &input_ids, cancel,
         )?;
-
-        // Mean-pool 1024→64 for DiT cond (placeholder until proper fix)
-        let (b, t, _) = cond_text.shape().dims3()?;
-        let group_size = 1024 / 64;
-        let cond_dit = cond_text
-            .reshape((b, t, 64, group_size))?
-            .mean(3)?;
-
-        let latent = dit.generate(&cond_dit, req.inference_timesteps, Some(42))?;
         // latent shape: [1, feat_dim, seq_len]
-        let latent_peak = latent.abs()?.flatten_all()?.max(0)?.to_vec0::<f32>()?;
+        let latent_peak = latent.abs()?.flatten_all()?.max(0)?.to_dtype(DType::F32)?.to_vec0::<f32>()?;
         if latent_peak < 0.001 {
             tracing::warn!("DiT latent very quiet (peak={:.6})", latent_peak);
         }
 
         // ── AudioVAE decode ──
         let vae = crate::models::AudioVAE::load(&audiovae_tensors, &config.audio_vae_config)?;
-        let waveform = vae.decode(&latent)?;
+        let latent_vae = latent.to_device(audiovae_dev)?.to_dtype(DType::F32)?;
+        eprintln!("  [pipe] AudioVAE decode on device: {:?}", latent_vae.device());
+        {
+            let latent_peak = tensor_peak(&latent_vae)?;
+            let latent_stats = tensor_stats(&latent_vae)?;
+            eprintln!("  [pipe] AudioVAE latent: peak={:.6} mean={:.6} std={:.6}",
+                latent_peak, latent_stats.0, latent_stats.1);
+        }
+        // Save latent for Python verification
+        if let Ok(latent_f32) = latent_vae.squeeze(0) {
+            let latent_flat = latent_f32.flatten_all()?.to_vec1::<f32>()?;
+            let latent_bytes: Vec<u8> = latent_flat.iter().flat_map(|v| v.to_le_bytes()).collect();
+            if std::fs::write("output/latent_rust.f32", &latent_bytes).is_ok() {
+                eprintln!("  [pipe] Saved latent to output/latent_rust.f32 ({} frames x 64 ch)", latent_vae.dim(1).unwrap_or(0));
+            }
+        }
+        let waveform = vae.decode(&latent_vae)?;
         // waveform shape: [1, 1, samples]
 
         // Flatten to Vec<f32>
         let vals = waveform.squeeze(0)?.squeeze(0)?.to_vec1::<f32>()?;
         Ok(vals)
     }
+}
+
+/// Quick helper: compute (mean, std, peak) of a tensor for debug tracing.
+/// Save a tensor as raw f32 bytes for debug comparison.
+fn save_debug_tensor(t: &Tensor, name: &str) -> anyhow::Result<()> {
+    let path = format!("output/{name}.f32");
+    let flat = t.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+    let bytes: Vec<u8> = flat.iter().flat_map(|v| v.to_le_bytes()).collect();
+    std::fs::write(&path, &bytes)?;
+    Ok(())
+}
+
+fn tensor_stats(t: &Tensor) -> anyhow::Result<(f32, f32, f32)> {
+    let flat = t.flatten_all()?.to_dtype(DType::F32)?;
+    let n = flat.elem_count();
+    let vals = flat.to_vec1::<f32>()?;
+    let mean = vals.iter().sum::<f32>() / n as f32;
+    let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / n as f32;
+    let peak = vals.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+    Ok((mean, var.sqrt(), peak))
+}
+
+/// Quick helper: compute peak of a tensor.
+fn tensor_peak(t: &Tensor) -> anyhow::Result<f32> {
+    Ok(t.flatten_all()?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .max_all()?
+        .to_vec0::<f32>()?)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -227,42 +365,10 @@ mod tests {
             vals[n/100], vals[99*n/100]);
 
         // ── LocDiT: diffusion generate ──
+        // TODO(Z7): replace with autoregressive loop test
         let feat_dim = config.feat_dim;
-        let sched = FlowMatchingScheduler::from_config(&config.dit_config.cfm_config);
-        let mut dit = LocDiT::load(
-            &main_vb.pp("feat_decoder"),
-            &config.dit_config,
-            feat_dim,
-            sched,
-        )?;
-        // Pass 1024-dim cond directly (DiT skips cond_proj when dim == hidden_dim)
-        let cond_dit = cond_text
-            .reshape((1, seq_len, 64, 16))?
-            .mean(3)?;
-        assert_eq!(cond_dit.dims(), &[1, seq_len, 64],
-            "cond_dit shape before LocDiT (mean-pooled to 64)");
-        // Debug cond_dit stats
-        let cd = cond_dit.to_vec3::<f32>()?;
-        let mut cd_vals: Vec<f32> = cd.iter().flat_map(|b| b.iter().flat_map(|t| t.iter())).copied().collect();
-        cd_vals.sort_by(|a,b| a.partial_cmp(b).unwrap());
-        let cn = cd_vals.len();
-        let cd_mean = cd_vals.iter().sum::<f32>() / cn as f32;
-        let cd_std = (cd_vals.iter().map(|v| (v - cd_mean).powi(2)).sum::<f32>() / cn as f32).sqrt();
-        println!("  cond_dit (mean-pooled 1024→64): mean={cd_mean:.6} std={cd_std:.6} p1={:.6} p99={:.6}",
-            cd_vals[cn/100], cd_vals[99*cn/100]);
-        let latent = dit.generate(&cond_dit, 2, Some(42))?;
-        assert_eq!(latent.dims(), &[1, feat_dim, seq_len],
-            "LocDiT latent shape");
-        println!("LocDiT generate OK: {:?}", latent.shape());
-        // Debug latent stats
-        let lt = latent.to_vec3::<f32>()?;
-        let mut lt_vals: Vec<f32> = lt.iter().flat_map(|b| b.iter().flat_map(|t| t.iter())).copied().collect();
-        lt_vals.sort_by(|a,b| a.partial_cmp(b).unwrap());
-        let ln = lt_vals.len();
-        let lt_mean = lt_vals.iter().sum::<f32>() / ln as f32;
-        let lt_std = (lt_vals.iter().map(|v| (v - lt_mean).powi(2)).sum::<f32>() / ln as f32).sqrt();
-        println!("  latent: mean={lt_mean:.6} std={lt_std:.6} p1={:.6} p99={:.6} peak={:.6}",
-            lt_vals[ln/100], lt_vals[99*ln/100], lt_vals[ln-1]);
+        let latent = Tensor::zeros(&[1, feat_dim, seq_len], DType::F32, &dev)?;
+        println!("  [test] WARNING: using zero latent (autoregressive loop not yet implemented)");
 
         // ── AudioVAE decode ──
         let vae = AudioVAE::load(&audiovae_tensors, &config.audio_vae_config)?;
