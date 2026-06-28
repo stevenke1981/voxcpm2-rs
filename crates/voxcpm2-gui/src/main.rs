@@ -58,14 +58,15 @@ impl Default for VoxApp {
                 ..Default::default()
             },
             synth_tab: SynthTab {
-                text: "你好，這是 VoxCPM2 Rust Candle egui 測試。".into(),
+                text: "你好，这是 VoxCPM2 Rust Candle egui 测试。".into(),
                 output_path: "output/gui_synth.wav".into(),
                 cfg: 2.5,
                 steps: 30,
+                seed: "99".into(),
                 ..Default::default()
             },
             clone_tab: CloneTab {
-                text: "這是語音克隆測試。".into(),
+                text: "这是语音克隆测试。".into(),
                 output_path: "output/gui_clone.wav".into(),
                 cfg: 2.5,
                 steps: 30,

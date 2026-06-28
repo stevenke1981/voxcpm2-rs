@@ -26,7 +26,7 @@ enum Command {
         steps: usize,
         #[arg(long)]
         max_ar_steps: Option<usize>,
-        #[arg(long, default_value_t = 100)]
+        #[arg(long, default_value_t = 99)]
         seed: u64,
         #[arg(long)]
         voice_design: Option<String>,
@@ -60,7 +60,7 @@ enum Command {
         steps: usize,
         #[arg(long)]
         max_ar_steps: Option<usize>,
-        #[arg(long, default_value_t = 100)]
+        #[arg(long, default_value_t = 99)]
         seed: u64,
         #[arg(long)]
         voice_design: Option<String>,

@@ -223,6 +223,11 @@
    - 改善：speech polish 新增 80Hz zero-phase high-pass 與 soft expander（threshold 0.006, floor gain 0.30）
    - 同 seed/同句驗證：0-80Hz 能量 `1.3403% -> 0.1178%`，quiet RMS `0.00260 -> 0.00191`，near-clip 維持 `0`
    - ASR 仍可辨識主句：「第三次集音修正測試／請確認人聲...」
+- [x] Mandarin 語言提示路徑固定（2026-06-29）：
+   - 根因：VoxCPM2 對中文腳本敏感；繁體中文提示容易偏向廣東話，聽感會被誤判成人聲雜音或語音不乾淨
+   - 改善：CLI/GUI 預設 seed 改為 seed sweep 最佳的 `99`，GUI Mandarin 範例文字改為簡體中文，pipeline 偵測常見繁體字時提示改用簡體中文
+   - 驗證：生成 `output/mandarin_asr_pass_seed99.wav`，原文「你好这是普通话语音测试」，ASR 辨識「你好 这是普通话语音测试」
+   - 補充：較長測試句尾段仍可能把「人声/杂音」辨成「人生/假意」，顯示殘留問題集中在尾段自回歸收束；Mandarin gate 先用簡體、短句與 ASR 完整對照
 - [x] GPU 模型權重快取 — `ModelCache` struct 避免 `synthesize` 每次重新載入 4.6 GB 模型權重<br>
   實作：`pipeline.rs` 新增 `ModelCache` 結構（`main_tensors` Arc、`audiovae_decoder_tensors`、`audiovae_all_tensors`、`tokenizer`、`config`），`VoxPipeline::ensure_cache()` 按需載入，`encode_ref_prefix()` 可接收預先載入的 encoder tensors
 - [ ] 推理速度優化（目前 30 step AR + 30 CFM + AudioVAE CUDA 約 30-60s）— 權重快取僅改善 GUI 多次生成的耗時，單次仍受推理計算限制

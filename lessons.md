@@ -93,3 +93,9 @@ VS 2022 Community 安裝於非預設路徑（`C:\Program Files\Microsoft Visual 
 **Trigger:** After CFM cond/latent fixes and 12kHz low-pass, generated speech was intelligible but still had audible residual noise.
 **Rule:** When 12kHz+ hiss is already low, measure sub-bass and quiet-frame RMS before adding more low-pass. If 0-80Hz or quiet-frame RMS remains elevated, add a conservative high-pass and soft expander; do not lower CFG blindly because it can reduce high-frequency noise while worsening text intelligibility.
 **Source:** third residual noise reduction pass
+
+---
+## Lesson #8 — 2026-06-29
+**Trigger:** Mandarin speech still sounded noisy when the prompt used Traditional Chinese.
+**Rule:** For Mandarin quality checks, use Simplified Chinese text and seed 99 first; Traditional Chinese characters can bias VoxCPM2 toward Cantonese, so validate the intended language with ASR before changing audio filters.
+**Source:** Mandarin residual noise pass

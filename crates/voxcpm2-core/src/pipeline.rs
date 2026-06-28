@@ -352,6 +352,12 @@ impl VoxPipeline {
         // ── Tokenizer (cached) ──
         let tokenizer = cache.tokenizer.clone();
         let target_text = build_voice_design_text(&req.text, req.voice_design.as_deref());
+        if looks_like_traditional_chinese_hint(&target_text) {
+            eprintln!(
+                "  [lang] Traditional Chinese text detected; VoxCPM2 may bias toward Cantonese. \
+                 For Mandarin, use Simplified Chinese text."
+            );
+        }
         let tokens = tokenizer.encode_zero_shot(&target_text)?;
         if tokens.is_empty() {
             anyhow::bail!("tokenizer returned empty tokens");
@@ -851,6 +857,15 @@ fn build_voice_design_text(text: &str, voice_design: Option<&str>) -> String {
     }
 }
 
+fn looks_like_traditional_chinese_hint(text: &str) -> bool {
+    const TRADITIONAL_HINTS: &[char] = &[
+        '這', '語', '聲', '請', '確', '認', '淨', '體', '測', '試', '雜', '會', '廣', '東', '國',
+        '門', '開', '後', '應', '該', '聽', '說', '對', '齊', '產', '當', '無', '線', '電', '腦',
+        '裡', '還', '點', '與', '為', '個', '們',
+    ];
+    text.chars().any(|ch| TRADITIONAL_HINTS.contains(&ch))
+}
+
 /// Quick helper: compute (mean, std, peak) of a tensor for debug tracing.
 /// Save a tensor as raw f32 bytes for debug comparison.
 #[cfg(feature = "debug-tensors")]
@@ -896,6 +911,12 @@ mod tests {
             build_voice_design_text("Hello", Some(" warm female voice ")),
             "(warm female voice)Hello"
         );
+    }
+
+    #[test]
+    fn traditional_chinese_hint_detects_mandarin_prompt_risk() {
+        assert!(looks_like_traditional_chinese_hint("你好，這是語音測試。"));
+        assert!(!looks_like_traditional_chinese_hint("你好，这是语音测试。"));
     }
 
     /// Verify the full pipeline shapes with real model weights.
