@@ -87,7 +87,8 @@ pub fn generate_autoregressive(
         h_lm_init.shape(),
         tensor_peak(&h_lm_init)?
     );
-    // Save TSLM output for comparison
+    // Save TSLM output for comparison (feature: debug-tensors)
+    #[cfg(feature = "debug-tensors")]
     save_debug_tensor(&h_lm_init, "debug_tslm_init")?;
     check_cancel("autoregressive-tslm-init")?;
 
@@ -170,6 +171,7 @@ pub fn generate_autoregressive(
         "  [autoregressive] RALM init: peak={:.6}",
         tensor_peak(&h_res_init)?
     );
+    #[cfg(feature = "debug-tensors")]
     save_debug_tensor(&h_res_init, "debug_ralm_init")?;
     check_cancel("autoregressive-ralm-init")?;
     let mut h_res = last_hidden(&h_res_init)?; // [B, 1, 2048]
@@ -179,10 +181,6 @@ pub fn generate_autoregressive(
             eprintln!("  [autoregressive] step {step}/{max_len}");
         }
         check_cancel(&format!("ar-step-{step}"))?;
-
-        // Save h_lm and h_res before each step for debugging
-        save_debug_tensor(&h_lm, &format!("debug_step{step}_hlm_before"))?;
-        save_debug_tensor(&h_res, &format!("debug_step{step}_hres_before"))?;
 
         // a. lm_to_dit_proj(lm_hidden) + res_to_dit_proj(residual_hidden) → dit_hidden [B, 2048]
         //    lm_to_dit: [1024, 2048] 投影 2048→1024;  concat 兩個 → [B, 1, 2048] → squeeze → [B, 2048]
@@ -198,9 +196,8 @@ pub fn generate_autoregressive(
             // Python uses [B, C=64, patch_size=4] of zeros (not zero-length!)
             Tensor::zeros(&[1, feat_dim, patch_size], cond_dtype, dev).unwrap()
         });
-        // Save mu_input for debugging
-        save_debug_tensor(&mu_input, &format!("debug_step{step}_mu_input"))?;
-
+        // 每個 patch 用 req.seed + step 產生唯一種子，確保完全可重現
+        let cfm_seed = req.seed.map(|base| base.wrapping_add(step as u64));
         let pred_feat = cfm.forward(
             &mu_input,
             n_timesteps,
@@ -208,10 +205,9 @@ pub fn generate_autoregressive(
             &cond,
             cfg_value as f64,
             cancel,
+            cfm_seed,
         )?;
         // pred_feat: [B, feat_dim, patch_size] = [1, 64, 4]
-        // Save pred_feat for debugging
-        save_debug_tensor(&pred_feat, &format!("debug_step{step}_pred_feat"))?;
         // Diagnostic: log latent stats at each step
         let pf_f32 = pred_feat.to_dtype(DType::F32)?;
         let pf_peak = tensor_peak(&pf_f32)?;
@@ -223,8 +219,6 @@ pub fn generate_autoregressive(
 
         // c. feat_encoder(音頻特徵) → curr_embed [B, 1, 2048]
         let curr_embed = feat_enc.encode(&pred_feat)?;
-        // Debug: save curr_embed stats.
-        save_debug_tensor(&curr_embed, &format!("debug_step{step}_currembed"))?;
 
         // d. stop_head check
         if should_check_stop(step, min_steps) {
@@ -279,6 +273,7 @@ fn tensor_peak(t: &Tensor) -> candle_core::Result<f32> {
         .to_vec0::<f32>()?)
 }
 
+#[cfg(feature = "debug-tensors")]
 fn save_debug_tensor(t: &Tensor, name: &str) -> candle_core::Result<()> {
     let path = format!("output/{name}.f32");
     let flat = t.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;

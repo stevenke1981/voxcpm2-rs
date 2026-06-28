@@ -16,7 +16,7 @@ impl Default for LocalConfig {
         Self {
             model_dir: "models/VoxCPM2".to_string(),
             device: "auto".to_string(),
-            default_cfg: 2.0,
+            default_cfg: 2.5,
             default_steps: 30,
             output_dir: "output".to_string(),
             label_ai_generated: true,

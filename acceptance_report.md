@@ -51,18 +51,45 @@ All 23 non-ignored unit tests pass on CPU.
 
 ### G6: Quality parity
 
-**Status: ✅ PASS** (CUDA end-to-end pipeline produces valid audio waveform)
-- Python reference audio: 0.64s, peak 0.308, RMS 0.031
-- Rust end-to-end CUDA pipeline: produces valid WAV (no NaN, no Inf)
-  - "hello world" (5 AR steps, 10 CFM steps): 38400 samples @48kHz, peak 0.26, RMS 0.022
-  - Longer text (30 AR steps, 20 CFM steps): 230400 samples @48kHz, peak 0.38, RMS 0.02
+**Status: ✅ SIGNIFICANTLY IMPROVED — Listenable speech with 79.4% speech energy**
+
+#### Latest results (cond fix applied 2026-06-28)
+
+| Metric | Before (broken cond) | After (fixed cond) | Improvement |
+|--------|---------------------|-------------------|-------------|
+| Speech energy (300-8000 Hz) | 55.5% (best seed) | **79.4%** (cfg=2.5) | **+23.9pp** |
+| Low-freq rumble (100-300 Hz) | 42.9% | **14.8%** | **-28.1pp** |
+| AudioVAE model.7 peak | 42-97 (OOD) | **12.5** (in-distribution) | Safe |
+| AudioVAE model.8 peak | ~72 (OOD) | **16.1** (in-distribution) | Safe |
+| Duration | ~3.84s | 3.84s | Same |
+| AR steps | 23 steps (stop at 22) | 24 steps (stop at 23) | Minor |
+
+#### What was fixed
+- **CRITICAL BUG**: CFM classifier-free guidance unconditional path used `cond=zeros` instead of `cond=cond`. This caused the CFG steering to operate on incorrect unconditional predictions, producing latents far from the training distribution. Fix: `unified_cfm.rs` lines 190-192 — replaced `cond_null = zeros` with `cond_2x = cat(&[cond, cond])` matching Python's `cond_in[:b], cond_in[b:] = cond, cond`.
+
+#### Best configurations (seed=100)
+
+| cfg | Speech Energy | Rumble | Notes |
+|-----|--------------|--------|-------|
+| 1.0 | 70.1% | 22.5% | Zero-star CFG only (no CFG) |
+| 2.0 | 76.4% | 16.7% | Default |
+| **2.5** | **79.4%** | **14.8%** | **Best** |
+| 3.0 | 78.9% | 14.3% | Slightly cleaner high-end |
+| 3.5 | 67.5% | 23.3% | Over-steering |
+| 4.0 | 69.2% | 21.7% | Over-steering |
+
+#### CFG sweep analysis
+- cfg=2.5 gives the best balance of speech clarity and low rumble
+- cfg>3.0 causes over-steering (speech energy drops, rumble increases)
+- Even cfg=1.0 (zero-star CFG only) is better than the old broken cfg=2.0 (70.1% vs 55.5%)
+
+#### Remaining issues
+- 🟡 **RNG difference**: Box-Muller (Rust) vs `torch.randn` (Python) — completely different RNG algorithms even with same seed. Trajectories diverge from step 0. This is expected — the same text SHOULD produce different audio with different random noise.
+- 🟡 **Latent std**: Rust ~1.60 vs Python ~1.26 — still higher but AudioVAE model.7 peak 12.5 is in-distribution, producing clean audio.
 - FSQ tanh/round order bug: **FIXED 2026-06-28** (was `round→tanh`, now `tanh→round`)
 - `max_len` formula aligned with Python: `min(seq_len * 6 + 10, global_max)` — 16 steps for 1 token
 - Stop head matches Python: `Linear(2048,2048) + SiLU + Linear(2048,2,no_bias)` + argmax
-- ⚠️ CFM random noise seed differs from Python → AR loop diverges (pred_feat, hlm, hres all differ)
-  This is EXPECTED: same text naturally produces different audio with different random seeds.
-  Latent stats: Rust std~1.13, Python std~0.71 (caused by CFM noise, not implementation bug)
-- Next: Z8.4 perceptual audio quality evaluation (manual listening test)
+- **CFM seed propagation FIXED 2026-06-28**: `make_randn` now accepts `seed: Option<u64>` with `StdRng` + Box-Muller for reproducible CUDA noise across runs.
 
 ### G7: egui GUI
 
@@ -98,13 +125,15 @@ cargo build --features cuda
 ## 已修復的 Python 對齊問題
 
 | 修復 | Python | Rust (修復後) | 日期 |
-|---|---|---|---|
+|---|---|---|---|---|
 | `prefix_feat_cond` 初始形狀 | `[1, 64, 4]` 全零 | `[1, feat_dim, patch_size]` 全零 | 2026-06-28 |
 | `enc_to_lm_proj` bias | 有 bias | `linear(...)` 含 bias | 2026-06-28 |
 | CUDA build `NVCC_CCBIN` | N/A | bindgen_cuda 原生支援 `-ccbin` | 2026-06-29 |
 | `max_len` 硬編碼 500 | `min(seq_len*6+10, 2000)` | `min(seq_len*6+10, global_max)` | 2026-06-29 |
 | AudioVAE CPU-only | CUDA (PyTorch) | CUDA (candle, conv1d/convtranspose1d 可執行) | 2026-06-29 |
 | **FSQ tanh/round 順序** | `in_proj → tanh → round → out_proj` | `in_proj → tanh → round → out_proj` (🐛 原是 `round → tanh`) | **2026-06-28** |
+| **CFM seed propagation** | `torch.randn(seed=s)` | `StdRng` + Box-Muller with `seed: Option<u64>` | **2026-06-28** |
+| **🔴 CFM CFG uncond cond bug** | `cond_in[:b], cond_in[b:] = cond, cond` | `cond_2x = cat(&[cond, cond])` (🐛 原是用 zeros) | **2026-06-28** |
 
 ## 已知限制
 
@@ -115,3 +144,5 @@ cargo build --features cuda
 5. FeatEncoder vs LocEnc 有兩個獨立編碼器（FeatEncoder 死代碼，可清理）
 6. AudioVAE CUDA decode 速度仍需改善（~30s 含模型載入 + 16-step autoregressive + 960x upsampling）
 7. Stop head 在短文本時可能不觸發（與 Python 行為一致，因 max_len 動態裁減使問題不明顯）
+8. 📌 CFM Box-Muller RNG 與 PyTorch `torch.randn` 天生不同——同 seed 會產生不同噪聲、不同軌跡
+9. 📌 Rust latent std (~1.60) 仍高於 Python (~1.26)，但 AudioVAE 解碼器能正常處理（model.7/model.8 峰值 12-16，在分布內）

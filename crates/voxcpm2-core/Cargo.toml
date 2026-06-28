@@ -10,6 +10,7 @@ cpu = []
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 mkl = ["candle-core/mkl"]
+debug-tensors = []
 
 [dependencies]
 anyhow.workspace = true

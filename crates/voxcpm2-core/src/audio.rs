@@ -1,6 +1,8 @@
 use std::path::Path;
 
+/// Lowpass cutoff for hiss reduction (12kHz, preserves full speech band).
 const SPEECH_LOWPASS_HZ: f32 = 12_000.0;
+
 const FADE_IN_MS: f32 = 5.0;
 const FADE_OUT_MS: f32 = 12.0;
 const PCM_HEADROOM: f32 = 0.95;
@@ -47,6 +49,7 @@ pub fn polish_generated_speech(samples: &mut [f32], sample_rate: u32) -> AudioPo
         *sample -= dc_offset;
     }
 
+    // Low-pass to remove hiss/ultrasonic residuals (12kHz, zero-phase)
     apply_one_pole_lowpass_zero_phase(samples, sample_rate, SPEECH_LOWPASS_HZ);
     apply_edge_fades(samples, sample_rate, FADE_IN_MS, FADE_OUT_MS);
 
@@ -124,6 +127,8 @@ fn lowpass_pass(samples: &mut [f32], alpha: f32) {
         *sample = y;
     }
 }
+
+
 
 fn apply_edge_fades(samples: &mut [f32], sample_rate: u32, fade_in_ms: f32, fade_out_ms: f32) {
     if samples.is_empty() || sample_rate == 0 {

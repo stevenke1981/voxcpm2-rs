@@ -60,7 +60,7 @@ impl Default for VoxApp {
             synth_tab: SynthTab {
                 text: "你好，這是 VoxCPM2 Rust Candle egui 測試。".into(),
                 output_path: "output/gui_synth.wav".into(),
-                cfg: 2.0,
+                cfg: 2.5,
                 steps: 30,
                 ..Default::default()
             },

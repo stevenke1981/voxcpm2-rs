@@ -1,6 +1,5 @@
 pub mod attention;
 pub mod audio_vae;
-pub mod feat_encoder;
 pub mod fsq_layer;
 pub mod loc_dit;
 pub mod loc_enc;
@@ -16,7 +15,6 @@ pub use attention::GQAAttention;
 pub use fsq_layer::FsqLayer;
 pub use stop_head::StopHead;
 pub use audio_vae::*;
-pub use feat_encoder::*;
 pub use loc_dit::*;
 pub use loc_enc::*;
 pub use mlp::MLP;

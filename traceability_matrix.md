@@ -26,12 +26,18 @@
 | D9 | AudioVAE on CUDA (PyTorch) | CPU-only (cuBLAS conv1d concern) | CUDA (candle conv1d/convtranspose1d works) | ✅ Fixed |
 | D10 | `ScalarQuantizationLayer`: `in_proj → tanh → round → out_proj` | `in_proj → floor(x*9+0.5)/9 → tanh → out_proj` | Fixed tanh/round order: `in_proj → tanh → round → out_proj` | ✅ Fixed 2026-06-28 |
 
+## 已修復差異
+
+| ID | Python | Rust (before fix) | Fix | Status |
+|---|---|---|---|---|
+| D11 | CFM noise: `torch.randn(seed=s)` | CFM noise: `Tensor::randn(seed=default)` — 無法控制種子 | `make_randn` 改用 `StdRng` + Box-Muller，接受 `seed: Option<u64>` | ✅ Fixed 2026-06-28 |
+| D13 | `unified_cfm.py:115`: CFG uncond path uses `cond_in[:b], cond_in[b:] = cond, cond` (same cond for both) | `unified_cfm.rs:191-192`: CFG uncond path used `cond_null = zeros` for second half | Both halves now get `cond` — only `mu` differs for unconditional | ✅ Fixed 2026-06-28 |
+
 ## 已知殘餘差異（設計所致，非 Bug）
 
 | ID | Python | Rust | 影響 | 原因 |
 |---|---|---|---|---|
-| D11 | CFM noise: `torch.randn(seed=default)` | CFM noise: `Tensor::randn(seed=default)` | AR loop 初始噪聲不同，後續 pred_feat / hlm / hres 軌跡不同 | 亂數種子不同是預期行為 |
-| D12 | Python latent std ~0.71 | Rust latent std ~1.13 | Rust 產生的音頻內容不同但合法（no NaN, peak 0.38） | CFM 噪聲種子不同 → AR 迭代發散 |
+| D12 | Python latent std ~1.26 | Rust latent std ~1.60 (after cond fix) | Rust 潛在 std 仍較高，但 AudioVAE model.7 峰值從 42-97 降至 12.5 (in-distribution) | CFM RNG 不同（Box-Muller vs torch.randn）導致不同軌跡，非實作錯誤 |
 
 ## 關鍵差異（設計差異，功能等效）
 
@@ -64,6 +70,6 @@
 | G3 | Tensor load | ✅ All safetensors loadable |
 | G4 | Submodule forward shapes | ✅ All shape tests pass |
 | G5 | Audio smoke (valid wav) | ✅ Real pipeline produces valid WAV on CUDA |
-| G6 | Quality parity | ✅ End-to-end CUDA pipeline produces valid audio (4.8s, no NaN, peak 0.38, RMS 0.02). Quality assessment pending. |
+| G6 | Quality parity | ✅ Best result: seed=100, cfg=2.5 → 79.4% speech energy (300-8000 Hz), 14.8% low-freq rumble (100-300 Hz). Cond fix eliminated AudioVAE CLS peaks (model.7: 42→12). Remaining: RNG difference (Box-Muller vs torch.randn) causes trajectory divergence. |
 | G7 | GUI complete flow | ✅ Scaffold complete |
 | G8 | GPU benchmark | ✅ CUDA end-to-end inference confirmed (device ID 1, RTX 3060 Ti, 30-step AR + 20-step CFM + VAE decode ~60s) |

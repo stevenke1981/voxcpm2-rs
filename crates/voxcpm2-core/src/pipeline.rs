@@ -40,7 +40,7 @@ impl Default for SynthRequest {
             model_dir: Some(PathBuf::from("models/VoxCPM2")),
             output_path: PathBuf::from("output/synth.wav"),
             device: "auto".into(),
-            cfg_value: 2.0,
+            cfg_value: 2.5,
             inference_timesteps: 30,
             dry_run: false,
             label_ai_generated: true,
@@ -209,6 +209,7 @@ impl VoxPipeline {
             "  [pipe] TSLM: seq_len={seq_len} text_len={text_len} h_tslm.shape={:?}",
             h_tslm.shape()
         );
+        #[cfg(feature = "debug-tensors")]
         save_debug_tensor(&h_tslm, "debug_pipe_tslm")?;
         let (tslm_mean, tslm_std, tslm_peak) = tensor_stats(&h_tslm)?;
         eprintln!("  [pipe] TSLM: seq_len={seq_len} text_len={text_len} mean={tslm_mean:.6} std={tslm_std:.6} peak={tslm_peak:.6}");
@@ -224,6 +225,7 @@ impl VoxPipeline {
             false,
         )?;
         let h_ralm = ralm.forward(&h_tslm, 0)?; // [1, seq_len, 2048]
+        #[cfg(feature = "debug-tensors")]
         save_debug_tensor(&h_ralm, "debug_pipe_ralm")?;
         let (ralm_mean, ralm_std, ralm_peak) = tensor_stats(&h_ralm)?;
         let h_tslm_peak = tensor_peak(&h_tslm)?;
@@ -233,6 +235,7 @@ impl VoxPipeline {
         check_cancel("cond")?;
         let (lm_to_dit, res_to_dit) = weights::load_text_to_dit_projections(&main_vb)?;
         let cond_text = (lm_to_dit.forward(&h_tslm)? + res_to_dit.forward(&h_ralm)?)?; // [1, seq_len, 1024]
+        #[cfg(feature = "debug-tensors")]
         save_debug_tensor(&cond_text, "debug_pipe_cond_text")?;
         let (ct_mean, ct_std, ct_peak) = tensor_stats(&cond_text)?;
         eprintln!(
@@ -297,6 +300,7 @@ fn build_voice_design_text(text: &str, voice_design: Option<&str>) -> String {
 
 /// Quick helper: compute (mean, std, peak) of a tensor for debug tracing.
 /// Save a tensor as raw f32 bytes for debug comparison.
+#[cfg(feature = "debug-tensors")]
 fn save_debug_tensor(t: &Tensor, name: &str) -> anyhow::Result<()> {
     let path = format!("output/{name}.f32");
     let flat = t.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;

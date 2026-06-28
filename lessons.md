@@ -78,3 +78,13 @@ VS 2022 Community 安裝於非預設路徑（`C:\Program Files\Microsoft Visual 
 **Trigger:** VoxCPM2 Rust CUDA 已能產生清楚人聲，但仍有些微雜音。
 **Rule:** 在寫出 generated speech 前，先量測 DC/peak/high-frequency energy；若 raw AudioVAE waveform 仍有 DC offset、近滿刻度峰值或 12kHz 以上殘留，套用保守輸出閘（DC removal、light low-pass、edge fade、headroom limiter）再寫 PCM，並用 ASR 確認人聲仍可辨識。
 **Source:** reduce residual speech noise
+
+## Lesson #5 — 2026-06-28 (Critical Bug)
+**Trigger:** CFM CFG unconditional path used `cond=zeros` instead of `cond=cond`, causing 42.9% low-frequency rumble.
+**Rule:** When implementing CFG zero-star CFM, the unconditional path must receive the SAME `cond` (audio prefix) as the conditional path — only `mu` (text condition) should differ. Python reference: `cond_in[:b], cond_in[b:] = cond, cond`. Using zeros for `cond` in the unconditional path breaks the classifier-free guidance steering.
+**Source:** `unified_cfm.rs:lines 190-192` — replaced `cond_null=zeros` with `cond_2x = cat(&[cond, cond])`.
+
+## Lesson #6 — 2026-06-28
+**Trigger:** Prefill h_lm/h_res matched perfectly between Python and Rust (cos_sim > 0.9999), but CFM pred_feat diverged completely (cos_sim ~0.05) even after fixing the cond bug.
+**Rule:** CFM noise generation (`make_randn` Box-Muller vs `torch.randn`) produces completely different noise tensors even with the same seed. This is an expected RNG implementation difference — Box-Muller (Rust) vs Philox/Ziggurat (PyTorch CUDA) are fundamentally different algorithms. The resulting trajectories diverge from the first step. For perfect reproducibility, pre-generate noise in Python and load as a static tensor in Rust during comparison runs.
+**Source:** `unified_cfm.rs:make_randn` vs `unified_cfm.py:torch.randn`

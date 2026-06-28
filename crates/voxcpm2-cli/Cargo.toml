@@ -14,6 +14,7 @@ cpu = ["voxcpm2-core/cpu"]
 cuda = ["voxcpm2-core/cuda"]
 metal = ["voxcpm2-core/metal"]
 mkl = ["voxcpm2-core/mkl"]
+debug-tensors = ["voxcpm2-core/debug-tensors"]
 
 [dependencies]
 anyhow.workspace = true

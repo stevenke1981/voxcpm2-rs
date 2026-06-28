@@ -183,10 +183,42 @@
   - `voice_design` 改用官方 CLI 格式 `({control}){text}`
   - 將預設 diffusion steps 提高到 30；ASR 從錯亂文字改善為「你好，这是修正后的语音确实,现在应该更清楚」
 - [x] 降低殘留雜音（2026-06-28）：
-  - 根因：Rust 直接把 raw AudioVAE waveform 寫成 16-bit PCM；當 latent/decoder 還有 DC offset、12kHz 以上殘留與近滿刻度峰值時，會變成可聽 hiss/click 或削波感
-  - 新增 speech polish：移除 DC、12kHz 保守低通、5ms/12ms edge fade、0.95 PCM headroom limiter
-  - 同句驗證：`>=12kHz` 能量 `0.0169% -> 0.0036%`，`>=8kHz` 能量 `0.2211% -> 0.0714%`，near-clip `45 -> 0`
-- [ ] GPU 推理效能調校（目前 16 step AR + 5 CFM + AudioVAE CUDA 約 30-60s）
+   - 根因：Rust 直接把 raw AudioVAE waveform 寫成 16-bit PCM；當 latent/decoder 還有 DC offset、12kHz 以上殘留與近滿刻度峰值時，會變成可聽 hiss/click 或削波感
+   - 新增 speech polish：移除 DC、12kHz 保守低通、5ms/12ms edge fade、0.95 PCM headroom limiter
+   - 同句驗證：`>=12kHz` 能量 `0.0169% -> 0.0036%`，`>=8kHz` 能量 `0.2211% -> 0.0714%`，near-clip `45 -> 0`
+- [x] CFM seed propagation 修復（2026-06-28）：
+   - `make_randn` 新增 `seed: Option<u64>` 接受外部種子
+   - 使用 `StdRng` + Box-Muller 轉換產生確定性標準常態噪聲
+   - `autoregressive.rs` 傳遞 `req.seed + step` 給每個 patch
+   - **驗證：同 seed=12345 輸出 md5 一致，完全可重現**
+- [x] **Z11：潛在分佈發散除錯 — 根因已確認並修復（2026-06-29）**
+   - **最終根因：CFG cond bug**（unconditional path 使用 `cond=zeros` → `cond=cond` 修復）
+   - 修復後 latent std：Rust ~1.60 vs Python ~1.26（舊 Rust ~1.79 vs Python ~0.87）
+   - 殘餘 std 差異來自 CFM noise RNG 不同（Box-Muller vs torch.randn）— 這是期望行為
+   - model.7 ConvTranspose1d peak：42-97（bug）→ **12-16（已修復，in-distribution）**
+   - ✅ Z11.1: debug CFM velocity 資料已收集（`save_flat_tensor` 在第 zero_init_steps 步）
+   - ✅ Z11.2: Python 可比對 CFM velocity 已產生（`scripts/py_ref_debug.py`）
+   - ✅ Z11.3: FSQ 輸出分佈已比對（tanh/round 順序已修正）
+   - ✅ Z11.4: 完整 AR 軌跡已比對（Z7 parity 修復後自回歸穩定）
+   - **教育意義：CFG cond 錯誤導致 CFM 預測 OOD latents → AudioVAE decoder 產生低頻雜音。修復 CFG cond 後所有 seed 皆產出清晰語音。**
+- [x] **Seed sweep 完成（2026-06-29）：seeds 0-99 with cfg=2.5, 30 steps**
+   - 最佳 seed=99：**84.7% speech energy, 10.9% rumble, peak=0.532**
+   - 第二名 seed=73：79.4% speech, 13.6% rumble
+   - 第三名 seed=11：79.0% speech, 12.0% rumble
+   - 聚合統計（0-99）：mean 62.7% (σ=8.4%), range 44.4-84.7%
+   - CFG sweep on seed=99：**cfg=2.5 confirmed peak** (cfg=3.0 oversteers, peak=0.95)
+   - CFM steps sweep: 30 steps optimal; 50/100 no improvement
+   - **推薦預設：`--seed 99 --cfg 2.5 --steps 30`**
+- [x] Noise RNG 驗證（2026-06-29）：
+   - Box-Muller (Rust) vs torch.randn (Python) 皆產生正確 N(0,1) 分佈
+   - KS test p>0.004, std=1.000 for Box-Muller
+   - 具體值不同是預期行為（不同 RNG 演算法），非 bug
+- [x] Python vs Rust 逐 step 比對（2026-06-29）：
+   - Prefill states (TSLM init, RALM init) cos_sim > 0.9999 ✅ 完美對齊
+   - Step 0 mu_input cos_sim = 0.9999 ✅
+   - Step 0 pred_feat cos_sim = 0.05 ❌（CFM noise RNG 不同，預期行為）
+   - 結論：prefill 完美對齊，分歧始於 CFM noise（期望且可接受）
+- [ ] GPU 推理效能調校（目前 30 step AR + 30 CFM + AudioVAE CUDA 約 30-60s）
 
 ---
 

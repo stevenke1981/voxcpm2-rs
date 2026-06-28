@@ -20,14 +20,14 @@ enum Command {
         model_dir: Option<PathBuf>,
         #[arg(long, default_value = "auto")]
         device: String,
-        #[arg(long, default_value_t = 2.0)]
+        #[arg(long, default_value_t = 2.5)]
         cfg: f32,
         #[arg(long, default_value_t = 30)]
         steps: usize,
         #[arg(long)]
         max_ar_steps: Option<usize>,
-        #[arg(long)]
-        seed: Option<u64>,
+        #[arg(long, default_value_t = 100)]
+        seed: u64,
         #[arg(long)]
         voice_design: Option<String>,
         #[arg(long)]
@@ -83,7 +83,7 @@ fn main() -> anyhow::Result<()> {
                 cfg_value: cfg,
                 inference_timesteps: steps,
                 max_autoregressive_steps: max_ar_steps,
-                seed,
+                seed: Some(seed),
                 voice_design,
                 post_gain: gain,
                 dry_run,

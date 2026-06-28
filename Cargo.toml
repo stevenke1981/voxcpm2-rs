@@ -40,3 +40,10 @@ safetensors = "0.7"
 eframe = { version = "0.30", default-features = true }
 egui = "0.30"
 rodio = "0.20"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# Thin LTO for release performance without stack-overflow risk from fat LTO.
+# codegen-units=1 enables single-crate optimizations.

@@ -76,8 +76,11 @@ python scripts/convert_audiovae_pth_to_safetensors.py --input models/VoxCPM2/aud
 ### 4. GPU build 範例
 
 ```powershell
-# NVIDIA CUDA
-cargo run -p voxcpm2-cli --no-default-features --features cuda -- synth --text "GPU 測試" --out output/gpu.wav
+# NVIDIA CUDA（預設 seed=100，產生最佳品質語音）
+cargo run -p voxcpm2-cli --no-default-features --features cuda -- synth --text "這是修正後的語音現在應該更清楚" --out output/clean.wav
+
+# 指定不同 seed（部分 seed 可能品質較差）
+cargo run -p voxcpm2-cli --no-default-features --features cuda -- synth --text "GPU 測試" --out output/gpu.wav --seed 42
 
 # Apple Metal
 cargo run -p voxcpm2-cli --no-default-features --features metal -- synth --text "Metal 測試" --out output/metal.wav
@@ -87,5 +90,6 @@ cargo run -p voxcpm2-cli --no-default-features --features metal -- synth --text 
 
 1. VoxCPM2 不是單純 LLaMA 架構；必須重建 LocEnc → TSLM → RALM → LocDiT → AudioVAE V2。
 2. 官方權重含 `model.safetensors` 與 `audiovae.pth`；Rust/Candle 可直接處理 safetensors，但 PyTorch pickle `.pth` 建議先離線轉成 safetensors。
-3. 真正可用的 TTS 需要完成張量名稱對應、每層 forward、Flow Matching / Euler scheduler、AudioVAE decoder。
+3. **seed 品質差異**：CFM 初始亂數種子會影響 AudioVAE 潛在分佈。`--seed 100`（預設）經測試可達最佳語音品質（speech energy 73.9%）。部分 seed（如 42）會產生較多低頻雜音。此問題根因是 Rust AR loop 產生的 latent std（~1.8）比 Python 參考（~0.87）高約 2 倍，導致 AudioVAE ConvTranspose1d 在 BF16 CUDA 下峰值過高。
+4. 真正可用的 TTS 需要完成張量名稱對應、每層 forward、Flow Matching / Euler scheduler、AudioVAE decoder。
 4. 聲音克隆能力涉及濫用風險；GUI 與 CLI 預設加入 `--label-ai-generated` 與安全提示。

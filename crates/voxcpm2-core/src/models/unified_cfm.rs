@@ -6,6 +6,9 @@
 
 use super::loc_dit::LocDiT;
 use candle_core::{DType, Device, Result, Tensor};
+use rand::rngs::StdRng;
+use rand::Rng;
+use rand::SeedableRng;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn save_flat_tensor(t: &Tensor, prefix: &str) -> Result<()> {
@@ -55,12 +58,33 @@ impl UnifiedCFM {
     }
 
     /// Create a randn tensor in the target dtype on the target device.
-    fn make_randn<S: Into<candle_core::Shape>>(&self, shape: S, _dev: &Device) -> Result<Tensor> {
+    fn make_randn<S: Into<candle_core::Shape>>(&self, shape: S, seed: Option<u64>, _dev: &Device) -> Result<Tensor> {
         let shape = shape.into();
+        let cpu_t = match seed {
+            Some(s) => {
+                // Seeded: use StdRng + Box-Muller on CPU (always F32)
+                let dims = shape.dims();
+                let n: usize = dims.iter().product();
+                let mut rng = StdRng::seed_from_u64(s);
+                let mut data = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let u1: f32 = rng.random::<f32>().clamp(f32::EPSILON, 1.0 - f32::EPSILON);
+                    let u2: f32 = rng.random::<f32>().clamp(f32::EPSILON, 1.0 - f32::EPSILON);
+                    let r = (-2.0 * u1.ln()).sqrt();
+                    let theta = 2.0 * std::f32::consts::PI * u2;
+                    data.push(r * theta.cos());
+                }
+                Tensor::from_vec(data, &shape, &Device::Cpu)?
+            }
+            None => {
+                // Unseeded: use candle's Tensor::randn
+                Tensor::randn(0.0f32, 1.0, &shape, &Device::Cpu)?
+            }
+        };
+        // Move to target device, converting dtype if needed
         if self.target_dtype == DType::F32 {
-            Tensor::randn(0.0f32, 1.0, &shape, _dev)
+            cpu_t.to_device(_dev)
         } else {
-            let cpu_t = Tensor::randn(0.0f32, 1.0, &shape, &Device::Cpu)?;
             let cvt = cpu_t.to_dtype(self.target_dtype)?;
             cvt.to_device(_dev)
         }
@@ -77,6 +101,8 @@ impl UnifiedCFM {
     ///   cancel:    Option<&AtomicBool> — 取消旗標
     ///
     /// 輸出：[B, C, patch_size] — 預測的 clean acoustic features
+    ///
+    /// `seed` 控制初始噪聲的隨機種子，None 則使用非確定性隨機。
     pub fn forward(
         &mut self,
         mu: &Tensor,
@@ -85,6 +111,7 @@ impl UnifiedCFM {
         cond: &Tensor,
         cfg_value: f64,
         cancel: Option<&AtomicBool>,
+        seed: Option<u64>,
     ) -> Result<Tensor> {
         let dev = mu.device();
         let _dtype = mu.dtype();
@@ -92,7 +119,8 @@ impl UnifiedCFM {
         let feat_dim = self.feat_dim; // C (fixed audio feature dimension, e.g. 64)
 
         // 初始噪聲 z ~ N(0, 1)，shape [B, C, patch_size]
-        let z = self.make_randn(&[batch, feat_dim, patch_size], &dev)?;
+        // 用 seed 確保可重現性
+        let z = self.make_randn(&[batch, feat_dim, patch_size], seed, &dev)?;
 
         // 時間步長（均勻分布，從 1 → 0）
         // Python: t_span = linspace(1, 0, n_timesteps+1), then sway_sampling
@@ -159,9 +187,9 @@ impl UnifiedCFM {
                 // Python: dt_in is zeros when mean_mode=false (standard inference)
                 let dt_val = if self.mean_mode { dt as f32 } else { 0.0f32 };
                 let dt_2x = self.make_full(dt_val, &[batch * 2], &dev)?;
-                // Python: uncond path uses zeros_like(cond)
-                let cond_null = self.make_full(0.0f32, &[batch, cond.dim(1)?, cond.dim(2)?], &dev)?;
-                let cond_2x = Tensor::cat(&[cond, &cond_null], 0)?;
+                // Python: uncond path also gets cond (both halves get same audio prefix)
+                // cond_in[:b], cond_in[b:] = cond, cond — line 115 of unified_cfm.py
+                let cond_2x = Tensor::cat(&[cond, cond], 0)?;
 
                 let full_pred = self.estimator.forward(
                     &x_2x, &mu_2x, &t_2x, &cond_2x, &dt_2x,

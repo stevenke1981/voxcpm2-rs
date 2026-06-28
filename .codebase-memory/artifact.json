@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "commit": "f1eca91f2e63818681f8e05d384113e9b9324ab5",
+  "indexed_at": "1782622008",
+  "project": "cbm+voxcpm2_rust_candle_pack",
+  "nodes": 535,
+  "edges": 943,
+  "original_size": 1531904,
+  "compressed_size": 325128,
+  "compression_level": 3
+}
