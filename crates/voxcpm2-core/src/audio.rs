@@ -8,6 +8,9 @@ const EXPANDER_THRESHOLD: f32 = 0.006;
 const EXPANDER_FLOOR_GAIN: f32 = 0.30;
 const EXPANDER_ATTACK_MS: f32 = 8.0;
 const EXPANDER_RELEASE_MS: f32 = 120.0;
+const BACKGROUND_GATE_FRAME_MS: f32 = 20.0;
+const BACKGROUND_GATE_FLOOR_GAIN: f32 = 0.12;
+const CLONE_REF_GATE_FLOOR_GAIN: f32 = 0.18;
 
 const FADE_IN_MS: f32 = 5.0;
 const FADE_OUT_MS: f32 = 12.0;
@@ -21,6 +24,7 @@ pub struct AudioPolishReport {
     pub headroom_gain: f32,
     pub quiet_rms_before: f32,
     pub quiet_rms_after: f32,
+    pub background_gate_threshold: f32,
 }
 
 /// Load a mono WAV file and return (samples, sample_rate).
@@ -118,6 +122,14 @@ pub fn polish_generated_speech(samples: &mut [f32], sample_rate: u32) -> AudioPo
     apply_one_pole_highpass_zero_phase(samples, sample_rate, SPEECH_HIGHPASS_HZ);
     apply_one_pole_lowpass_zero_phase(samples, sample_rate, SPEECH_LOWPASS_HZ);
     apply_soft_expander(samples, sample_rate);
+    let background_gate_threshold = apply_adaptive_background_gate(
+        samples,
+        sample_rate,
+        BACKGROUND_GATE_FLOOR_GAIN,
+        1.4,
+        0.0035,
+        0.020,
+    );
     apply_edge_fades(samples, sample_rate, FADE_IN_MS, FADE_OUT_MS);
 
     let peak_after_filter = peak(samples);
@@ -139,6 +151,58 @@ pub fn polish_generated_speech(samples: &mut [f32], sample_rate: u32) -> AudioPo
         headroom_gain,
         quiet_rms_before,
         quiet_rms_after: quiet_rms(samples, sample_rate),
+        background_gate_threshold,
+    }
+}
+
+pub fn polish_clone_reference_audio(samples: &mut [f32], sample_rate: u32) -> AudioPolishReport {
+    if samples.is_empty() {
+        return AudioPolishReport::default();
+    }
+
+    let peak_before = peak(samples);
+    let quiet_rms_before = quiet_rms(samples, sample_rate);
+    let dc_offset = samples.iter().sum::<f32>() / samples.len() as f32;
+    for sample in samples.iter_mut() {
+        *sample -= dc_offset;
+    }
+
+    apply_one_pole_highpass_zero_phase(samples, sample_rate, SPEECH_HIGHPASS_HZ);
+    apply_one_pole_lowpass_zero_phase(
+        samples,
+        sample_rate,
+        SPEECH_LOWPASS_HZ.min(sample_rate as f32 * 0.45),
+    );
+    let background_gate_threshold = apply_adaptive_background_gate(
+        samples,
+        sample_rate,
+        CLONE_REF_GATE_FLOOR_GAIN,
+        1.35,
+        0.004,
+        0.024,
+    );
+    apply_edge_fades(samples, sample_rate, FADE_IN_MS, FADE_OUT_MS);
+
+    let peak_after_filter = peak(samples);
+    let headroom_gain = if peak_after_filter > PCM_HEADROOM {
+        PCM_HEADROOM / peak_after_filter
+    } else {
+        1.0
+    };
+    if headroom_gain < 1.0 {
+        for sample in samples.iter_mut() {
+            *sample *= headroom_gain;
+        }
+    }
+
+    AudioPolishReport {
+        dc_offset,
+        peak_before,
+        peak_after: peak(samples),
+        headroom_gain,
+        quiet_rms_before,
+        quiet_rms_after: quiet_rms(samples, sample_rate),
+        background_gate_threshold,
     }
 }
 
@@ -227,6 +291,66 @@ fn apply_soft_expander(samples: &mut [f32], sample_rate: u32) {
         };
         *sample *= gain;
     }
+}
+
+fn apply_adaptive_background_gate(
+    samples: &mut [f32],
+    sample_rate: u32,
+    floor_gain: f32,
+    threshold_multiplier: f32,
+    min_threshold: f32,
+    max_threshold: f32,
+) -> f32 {
+    if samples.is_empty() || sample_rate == 0 {
+        return 0.0;
+    }
+
+    let frame_len = ((sample_rate as f32 * BACKGROUND_GATE_FRAME_MS) / 1000.0)
+        .round()
+        .max(1.0) as usize;
+    let frame_count = samples.len().div_ceil(frame_len);
+    if frame_count == 0 {
+        return 0.0;
+    }
+
+    let mut frame_rms = Vec::with_capacity(frame_count);
+    for frame_idx in 0..frame_count {
+        let start = frame_idx * frame_len;
+        let end = (start + frame_len).min(samples.len());
+        frame_rms.push(rms(&samples[start..end]));
+    }
+
+    let mut sorted = frame_rms.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let floor_idx = (sorted.len() / 10).min(sorted.len() - 1);
+    let noise_floor = sorted[floor_idx];
+    let threshold = (noise_floor * threshold_multiplier).clamp(min_threshold, max_threshold);
+    let full_open = (threshold * 2.2).max(threshold + 1e-6);
+    let floor_gain = floor_gain.clamp(0.0, 1.0);
+
+    let mut previous_gain = 1.0f32;
+    for (frame_idx, &frame_level) in frame_rms.iter().enumerate() {
+        let target_gain = if frame_level <= threshold {
+            floor_gain
+        } else if frame_level >= full_open {
+            1.0
+        } else {
+            let openness = (frame_level - threshold) / (full_open - threshold);
+            floor_gain + (1.0 - floor_gain) * openness.clamp(0.0, 1.0)
+        };
+
+        let start = frame_idx * frame_len;
+        let end = (start + frame_len).min(samples.len());
+        let span = (end - start).max(1) as f32;
+        for (i, sample) in samples[start..end].iter_mut().enumerate() {
+            let t = i as f32 / span;
+            let gain = previous_gain + (target_gain - previous_gain) * t;
+            *sample *= gain;
+        }
+        previous_gain = target_gain;
+    }
+
+    threshold
 }
 
 fn smoothing_coeff(ms: f32, sample_rate: u32) -> f32 {
@@ -361,6 +485,54 @@ mod tests {
 
         assert!(quiet_after < quiet_before * 0.75);
         assert!(loud_after > loud_before * 0.90);
+    }
+
+    #[test]
+    fn adaptive_background_gate_reduces_gaps_and_preserves_speech() {
+        let sample_rate = 48_000;
+        let mut samples = vec![0.006; sample_rate as usize / 10];
+        samples.extend(
+            sine(sample_rate as usize / 10, sample_rate, 900.0)
+                .into_iter()
+                .map(|s| s * 0.05),
+        );
+        samples.extend(vec![0.006; sample_rate as usize / 10]);
+
+        let quiet_before = rms(&samples[..sample_rate as usize / 10]);
+        let speech_start = sample_rate as usize / 10;
+        let speech_end = speech_start + sample_rate as usize / 10;
+        let speech_before = rms(&samples[speech_start..speech_end]);
+
+        let threshold = apply_adaptive_background_gate(
+            &mut samples,
+            sample_rate,
+            BACKGROUND_GATE_FLOOR_GAIN,
+            1.4,
+            0.0035,
+            0.020,
+        );
+
+        let quiet_after = rms(&samples[..sample_rate as usize / 10]);
+        let speech_after = rms(&samples[speech_start..speech_end]);
+        assert!(threshold > 0.0);
+        assert!(quiet_after < quiet_before * 0.55);
+        assert!(speech_after > speech_before * 0.85);
+    }
+
+    #[test]
+    fn clone_reference_polish_reduces_background() {
+        let sample_rate = 16_000;
+        let mut samples = vec![0.012; sample_rate as usize / 5];
+        samples.extend(
+            sine(sample_rate as usize / 5, sample_rate, 1_000.0)
+                .into_iter()
+                .map(|s| s * 0.08),
+        );
+
+        let report = polish_clone_reference_audio(&mut samples, sample_rate);
+        assert!(report.background_gate_threshold > 0.0);
+        assert!(report.quiet_rms_after < report.quiet_rms_before * 0.75);
+        assert!(peak(&samples) <= PCM_HEADROOM + 1e-6);
     }
 
     fn sine(len: usize, sample_rate: u32, hz: f32) -> Vec<f32> {

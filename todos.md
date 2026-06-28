@@ -228,6 +228,11 @@
    - 改善：CLI/GUI 預設 seed 改為 seed sweep 最佳的 `99`，GUI Mandarin 範例文字改為簡體中文，pipeline 偵測常見繁體字時提示改用簡體中文
    - 驗證：生成 `output/mandarin_asr_pass_seed99.wav`，原文「你好这是普通话语音测试」，ASR 辨識「你好 这是普通话语音测试」
    - 補充：較長測試句尾段仍可能把「人声/杂音」辨成「人生/假意」，顯示殘留問題集中在尾段自回歸收束；Mandarin gate 先用簡體、短句與 ASR 完整對照
+- [x] Synth/clone 背景底噪降低（2026-06-29）：
+   - 根因：現有 soft expander release 太慢，字間背景沒有完全關閉；clone reference 在進 AudioVAE encoder 前只做 resample，會把 reference 背景噪聲寫進 speaker conditioning
+   - 改善：輸出端新增 20ms frame-based adaptive background gate；clone reference audio 在 16kHz encode 前先做 DC removal、80Hz high-pass、低通與 adaptive gate
+   - Synth 驗證：`mandarin_asr_pass_seed99.wav -> mandarin_bg_gate_seed99.wav`，frame RMS q10 `0.00533 -> 0.00073`，ASR 仍為「你好 这是普通话语音测试」
+   - Clone 驗證：`clone_fixed.wav -> clone_bg_gate_seed99.wav`，frame RMS q10 `0.02415 -> 0.00022`；reference quiet RMS `0.013710 -> 0.002763`；ASR 主句辨識為「这是普通话语音测试」
 - [x] GPU 模型權重快取 — `ModelCache` struct 避免 `synthesize` 每次重新載入 4.6 GB 模型權重<br>
   實作：`pipeline.rs` 新增 `ModelCache` 結構（`main_tensors` Arc、`audiovae_decoder_tensors`、`audiovae_all_tensors`、`tokenizer`、`config`），`VoxPipeline::ensure_cache()` 按需載入，`encode_ref_prefix()` 可接收預先載入的 encoder tensors
 - [ ] 推理速度優化（目前 30 step AR + 30 CFM + AudioVAE CUDA 約 30-60s）— 權重快取僅改善 GUI 多次生成的耗時，單次仍受推理計算限制

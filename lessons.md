@@ -99,3 +99,9 @@ VS 2022 Community 安裝於非預設路徑（`C:\Program Files\Microsoft Visual 
 **Trigger:** Mandarin speech still sounded noisy when the prompt used Traditional Chinese.
 **Rule:** For Mandarin quality checks, use Simplified Chinese text and seed 99 first; Traditional Chinese characters can bias VoxCPM2 toward Cantonese, so validate the intended language with ASR before changing audio filters.
 **Source:** Mandarin residual noise pass
+
+---
+## Lesson #9 — 2026-06-29
+**Trigger:** Synth and clone speech were intelligible, but both still had audible background noise.
+**Rule:** For residual background noise, measure frame-level quiet RMS and clean both stages: output WAV polish for synth/clone, and clone reference audio before AudioVAE encoding so reference noise is not baked into speaker conditioning.
+**Source:** synth and clone background noise pass
