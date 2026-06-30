@@ -89,4 +89,5 @@
 - [ ] README 快速開始。
 - [ ] FAQ：CUDA、C4819、缺檔、VRAM。
 - [ ] Golden report。
+- [x] CLI voice clone consent gate：`clone` 必須帶 `--i-have-consent`，未授權請求會在載入模型或寫 WAV 前失敗。
 - [ ] Safety notice。

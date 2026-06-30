@@ -73,6 +73,9 @@ enum Command {
         /// Clone strength (0.0 = text-only, 1.0 = full clone).
         #[arg(long, default_value_t = 1.0)]
         clone_strength: f64,
+        /// Confirm that you have rights/consent to use the reference voice.
+        #[arg(long)]
+        i_have_consent: bool,
         #[arg(long)]
         dry_run: bool,
         #[arg(long, default_value_t = true)]
@@ -157,7 +160,9 @@ fn main() -> anyhow::Result<()> {
             t_scheduler,
             latent_norm,
             clone_strength,
+            i_have_consent,
         } => {
+            ensure_clone_consent(i_have_consent)?;
             let mut pipe = VoxPipeline::new(&device, model_dir.as_deref(), dry_run)?;
             let req = SynthRequest {
                 text,
@@ -207,4 +212,30 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn ensure_clone_consent(i_have_consent: bool) -> anyhow::Result<()> {
+    if !i_have_consent {
+        anyhow::bail!(
+            "voice clone requires explicit consent: pass --i-have-consent only when you have rights to use the reference voice"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_consent_gate_rejects_missing_confirmation() {
+        let err = ensure_clone_consent(false).unwrap_err().to_string();
+        assert!(err.contains("--i-have-consent"));
+        assert!(err.contains("rights"));
+    }
+
+    #[test]
+    fn clone_consent_gate_allows_confirmed_request() {
+        ensure_clone_consent(true).unwrap();
+    }
 }

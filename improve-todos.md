@@ -10,12 +10,13 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
 
 ## P0 - 安全與產品契約
 
-- [ ] **強制 clone consent CLI gate**
+- [x] **強制 clone consent CLI gate**
   - 目前 `configs/voxcpm2.local.example.toml` 已有 `require_voice_clone_consent = true`，
-    但 `crates/voxcpm2-cli/src/main.rs` 的 `Clone` command 尚未強制 `--i-have-consent`。
+    且 `crates/voxcpm2-cli/src/main.rs` 的 `Clone` command 已強制 `--i-have-consent`。
   - 對齊 `voxcpm-cpp`：任何 reference/prompt audio clone 都必須明確 consent。
   - 驗收：未帶 consent 的 clone 以非 0 exit code 結束，錯誤訊息說明必須取得合法授權；
     帶 consent 且其他參數正確時維持現有行為。
+  - 狀態：已補 CLI gate、單元測試、README 範例；GUI consent gate 仍列在 P2。
 
 - [ ] **避免隱藏生成語音身分**
   - 保留 `label_ai_generated` 預設 true。
