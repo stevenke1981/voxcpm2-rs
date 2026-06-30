@@ -1,0 +1,54 @@
+# VoxCPM2 Rust/Candle 改善最終驗收
+
+## 參考基準
+
+- Current repo：`E:\voxcpm2_rust_candle_pack`，已用 CBM 建立 `cbm+voxcpm2_rust_candle_pack` 索引。
+- Reference repo：`stevenke1981/voxcpm-cpp` shallow clone commit `896f595`，已用 CBM 建立 `cbm+voxcpm-cpp-ref` 索引。
+
+## 本次診斷結論
+
+Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力；CBM 顯示目前主要路徑集中在：
+
+- `crates/voxcpm2-core/src/pipeline.rs`：`VoxPipeline`、`SynthRequest`、model cache、synth/clone pipeline、reference prefix encoding。
+- `crates/voxcpm2-core/src/audio.rs`：generated speech polish、clone reference polish、adaptive background gate、harsh midband smoother。
+- `crates/voxcpm2-cli/src/main.rs`：synth/clone/inspect/benchmark CLI。
+- `crates/voxcpm2-gui/src/main.rs`：GUI worker/cancel/update loop。
+
+與 `voxcpm-cpp` 相比，Rust 目前的主要缺口不是「能不能出聲」，而是：
+
+1. voice clone consent 尚未在 CLI 強制執行。
+2. clone 模式尚未完整覆蓋 reference-only、prompt-only continuation、combined。
+3. 音訊品質修正尚未形成固定 WAV metrics + ASR + backend matrix 的 release gate。
+4. GUI 與 CLI 還需要共用同一套 safety/quality gate。
+5. release package hygiene 尚未像 C++ repo 一樣明確排除模型、WAV、fixtures、debug dump。
+
+## 最終完成定義
+
+以下條件全部通過後，才可宣稱 Rust/Candle 版本達到「可正常產生清楚人聲語音、可安全複製語音、可發布」：
+
+- **Safety**：clone 必須要求明確 consent；未授權 clone 不生成 WAV。
+- **Speech quality**：seed 99 Mandarin synth 通過 WAV metrics 與 ASR；中段 high-ZCR / 4-8kHz burst 不回歸。
+- **Clone quality**：reference noise 在 AudioVAE encoder 前被量測並降低；clone WAV 通過 ASR 與 metrics。
+- **Parity**：clone sequence、padding、mask、patch count 與 Python/C++ fixture 對齊。
+- **Backend**：CPU/CUDA smoke 都產生 finite、non-empty、無 clipping 的 WAV，且紀錄 RTF/記憶體。
+- **GUI**：GUI synth/clone/cancel 與 CLI 使用同一套安全、模型與音訊診斷。
+- **Release**：release build/package 不包含模型權重、WAV、fixtures、debug artifacts，文件與實測一致。
+
+## 建議交付順序
+
+1. 先修 P0 consent gate，因為這是安全與產品契約，不依賴模型權重。
+2. 接著把 `AudioPolishReport` 串成 JSON/metrics artifact，讓後續音質修正都可比較。
+3. 建立 Mandarin seed 99 synth gate 與 noisy reference clone gate。
+4. 補 clone parity fixtures，再擴展 prompt-only/combined clone。
+5. 最後做 backend matrix、GUI smoke、release package hygiene。
+
+## 風險
+
+- 不應再用更重的全域低通或 gate 嘗試消除所有雜音；目前 lessons 指向中段刺耳音通常是 high-ZCR / 4-8kHz burst，需要局部 smoother 與 ASR 保護。
+- Mandarin 品質測試若使用繁體中文，可能被 VoxCPM2 判為廣東話傾向；基準測試必須使用簡體中文。
+- CFM RNG 與 Python/CUDA 不同，不能用 same seed 期待 sample-level 完全一致；需要固定 noise tensor fixture 才能做嚴格 parity。
+- Voice clone reference 若太長會放大 AudioVAE encoder 記憶體壓力；trim 行為要明確記錄並測試。
+
+## 下一個 commit 建議
+
+下一個實作 commit 建議只做一件事：新增 `--i-have-consent` 到 Rust CLI clone，並補 CLI 測試或 smoke script。這能最快縮小與 C++ 參考實作的安全差距，也不會干擾目前音訊品質修正。
