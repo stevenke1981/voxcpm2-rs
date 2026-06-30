@@ -53,6 +53,18 @@
 
 ## G2 - Mandarin synth audio gate
 
+可直接使用 harness 跑固定 prompt set：
+
+```powershell
+.\harness\audio_quality_gate.ps1 `
+  -ModelDir models\VoxCPM2 `
+  -Device cuda `
+  -OutDir output\quality-gate `
+  -SkipClone
+```
+
+單句手動命令：
+
 ```powershell
 .\run_with_vs.cmd cargo run -p voxcpm2-cli -- synth `
   --model-dir models\VoxCPM2 `
@@ -77,6 +89,18 @@
 - clean reference。
 - background-noisy reference。
 - long reference (>30s)。
+
+可直接使用 harness 跑 clone gate：
+
+```powershell
+.\harness\audio_quality_gate.ps1 `
+  -ModelDir models\VoxCPM2 `
+  -Device cuda `
+  -RefAudio fixtures\clone\noisy_ref.wav `
+  -OutDir output\quality-gate
+```
+
+單句手動命令：
 
 ```powershell
 .\run_with_vs.cmd cargo run -p voxcpm2-cli -- clone `

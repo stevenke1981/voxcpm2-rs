@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "language": "Mandarin",
+  "script": "Simplified Chinese",
+  "seed": 99,
+  "notes": [
+    "Use Simplified Chinese for Mandarin quality gates. Traditional Chinese can bias VoxCPM2 toward Cantonese.",
+    "Keep these prompts short enough for smoke runs but varied enough to exercise pauses and fricative-like regions."
+  ],
+  "cases": [
+    {
+      "id": "mandarin_seed99_short",
+      "text": "这是普通话语音质量回归测试。",
+      "required_terms": ["普通话", "语音质量"]
+    },
+    {
+      "id": "mandarin_seed99_midburst",
+      "text": "这是普通话语音质量回归测试，中间不应该出现刺耳杂音。",
+      "required_terms": ["普通话", "语音质量", "刺耳杂音"]
+    },
+    {
+      "id": "mandarin_seed99_fricatives",
+      "text": "细小的声音先升高再下降，请保持清晰自然。",
+      "required_terms": ["细小", "清晰自然"]
+    }
+  ]
+}

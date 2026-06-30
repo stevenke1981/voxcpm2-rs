@@ -25,10 +25,12 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
 
 ## P1 - 文字與語言輸入品質 gate
 
-- [ ] **建立 Mandarin regression prompt set**
+- [x] **建立 Mandarin regression prompt set**
   - 對 Mandarin 測試使用簡體中文與 seed 99 作為第一基準，避免繁體字觸發廣東話傾向。
   - 至少包含：短句、長句、含擦音句、含停頓句。
   - 驗收：每個輸出都保存 WAV metrics、ASR transcript、command、seed、model hash。
+  - 狀態：已新增 `tests/golden/mandarin_regression_prompts.json` 與 `harness/audio_quality_gate.ps1`；
+    目前可產生 WAV/metrics 並做結構檢查，ASR transcript 比對仍是下一層 gate。
 
 - [ ] **保留繁體中文風險提示並加測試**
   - 目前 `pipeline.rs` 已有 Traditional Chinese hint detection。

@@ -114,6 +114,12 @@ pub struct SynthMetricsReport {
     pub is_clone: bool,
     pub label_ai_generated: bool,
     pub polish: Option<audio::AudioPolishReport>,
+    pub clone_reference_polish: Option<audio::AudioPolishReport>,
+}
+
+struct RealSynthesisResult {
+    samples: Vec<f32>,
+    clone_reference_polish: Option<audio::AudioPolishReport>,
 }
 
 /// Cached model weights to avoid reloading from disk on every inference call.
@@ -257,6 +263,7 @@ impl VoxPipeline {
             .map(|c| c.audio_vae_config.out_sample_rate)
             .unwrap_or(48_000);
 
+        let mut clone_reference_polish = None;
         let mut samples = if req.dry_run {
             audio::smoke_tone(&req.text, sample_rate)
         } else {
@@ -267,7 +274,9 @@ impl VoxPipeline {
             // Ensure model weights are cached before synthesis
             let is_clone = req.ref_audio_path.is_some();
             self.ensure_cache(model_dir, is_clone)?;
-            self.synthesize_real(req, model_dir, sample_rate, cancel)?
+            let real = self.synthesize_real(req, model_dir, sample_rate, cancel)?;
+            clone_reference_polish = real.clone_reference_polish;
+            real.samples
         };
 
         // Apply post-gain if specified, or warn if very quiet
@@ -328,6 +337,7 @@ impl VoxPipeline {
                     is_clone: req.ref_audio_path.is_some(),
                     label_ai_generated: req.label_ai_generated,
                     polish: polish_report,
+                    clone_reference_polish,
                 },
             )?;
         }
@@ -343,7 +353,7 @@ impl VoxPipeline {
         model_dir: &Path,
         _sample_rate: u32,
         cancel: Option<&AtomicBool>,
-    ) -> anyhow::Result<Vec<f32>> {
+    ) -> anyhow::Result<RealSynthesisResult> {
         // Cancel check helpers
         let check_cancel = |name: &str| -> anyhow::Result<()> {
             if let Some(flag) = cancel {
@@ -405,6 +415,7 @@ impl VoxPipeline {
         // (needs TSLM for embed_text, so defer AR preparation until after TSLM is loaded)
         // We'll store the result here and use it during AR generation.
         let mut clone_prefix: Option<RefPrefixResult> = None;
+        let mut clone_reference_polish = None;
 
         let input_ids = if let Some(ref_path) = &req.ref_audio_path {
             // Load TSLM first (needed for embed_text in encode_ref_prefix)
@@ -429,6 +440,7 @@ impl VoxPipeline {
             )?;
             let n_patches = prefix.n_patches;
             let combined_seq_len = prefix.combined_ids.dim(1)?;
+            clone_reference_polish = Some(prefix.reference_polish);
             let combined_ids = prefix.combined_ids.clone();
             clone_prefix = Some(prefix);
             eprintln!(
@@ -655,7 +667,10 @@ impl VoxPipeline {
 
         // Flatten to Vec<f32>
         let vals = waveform.squeeze(0)?.squeeze(0)?.to_vec1::<f32>()?;
-        Ok(vals)
+        Ok(RealSynthesisResult {
+            samples: vals,
+            clone_reference_polish,
+        })
     }
 }
 
@@ -669,6 +684,8 @@ pub struct RefPrefixResult {
     pub feat_embeds: Tensor,
     /// Number of ref audio patches
     pub n_patches: usize,
+    /// Audio cleanup metrics measured before AudioVAE reference encoding.
+    pub reference_polish: audio::AudioPolishReport,
 }
 
 /// Encode a reference audio file and build the combined prefix for voice cloning.
@@ -896,6 +913,7 @@ pub fn encode_ref_prefix(
         combined_embeds,
         feat_embeds,
         n_patches,
+        reference_polish: ref_polish,
     })
 }
 
@@ -1007,6 +1025,7 @@ mod tests {
         assert_eq!(value["dry_run"], true);
         assert_eq!(value["is_clone"], false);
         assert!(value["polish"].is_null());
+        assert!(value["clone_reference_polish"].is_null());
         assert_eq!(value["samples"], result.samples);
 
         let _ = std::fs::remove_file(wav_path);
