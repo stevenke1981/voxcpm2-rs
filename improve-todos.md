@@ -48,6 +48,8 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
   - 以 `mandarin_bg_gate_seed99.wav` 症狀為模式，建立 high-ZCR / 4-8kHz burst 檢查。
   - 驗收：`apply_harsh_midband_smoother` 單元測試之外，至少一個端到端 sample gate
     能檢出中段刺耳 frame，並確認修正後 ASR 不退化。
+  - 狀態：已在 `harness/audio_quality_gate.ps1` 新增 20ms frame-level high-ZCR/harsh-frame
+    sidecar JSON；仍需用真實模型 sample 與 ASR transcript 建立 accepted baseline。
 
 - [ ] **clone reference 前處理回歸**
   - 目前 clone reference 已在 AudioVAE encoder 前做 `polish_clone_reference_audio`。

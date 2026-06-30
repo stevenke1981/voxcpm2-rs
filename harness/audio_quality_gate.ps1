@@ -6,6 +6,9 @@ param(
   [string]$RefAudio = "",
   [int]$Steps = 30,
   [int]$Seed = 99,
+  [double]$FrameMs = 20.0,
+  [double]$HighZcrThreshold = 0.11,
+  [double]$HarshRmsThreshold = 0.005,
   [switch]$DryRun,
   [switch]$SkipClone
 )
@@ -72,10 +75,53 @@ function Read-Pcm16WavMetrics([string]$Path) {
     }
 
     $peak = 0.0
-    for ($i = 0; $i + 1 -lt $audioBytes.Count; $i += 2) {
-      $sample = [BitConverter]::ToInt16($audioBytes, $i)
-      $value = [Math]::Abs([double]$sample / 32768.0)
-      if ($value -gt $peak) { $peak = $value }
+    $monoSamples = [Collections.Generic.List[double]]::new()
+    $frameBytes = 2 * [Math]::Max(1, $channels)
+    for ($offset = 0; $offset + ($frameBytes - 1) -lt $audioBytes.Count; $offset += $frameBytes) {
+      $sum = 0.0
+      for ($channel = 0; $channel -lt $channels; $channel++) {
+        $sample = [BitConverter]::ToInt16($audioBytes, $offset + (2 * $channel))
+        $value = [double]$sample / 32768.0
+        $abs = [Math]::Abs($value)
+        if ($abs -gt $peak) { $peak = $abs }
+        $sum += $value
+      }
+      $monoSamples.Add($sum / [double][Math]::Max(1, $channels))
+    }
+
+    $frameLen = [Math]::Max(1, [int][Math]::Round([double]$sampleRate * $FrameMs / 1000.0))
+    $highZcrFrameCount = 0
+    $maxZcr = 0.0
+    $maxFrameRms = 0.0
+
+    for ($start = 0; $start -lt $monoSamples.Count; $start += $frameLen) {
+      $end = [Math]::Min($start + $frameLen, $monoSamples.Count)
+      $count = [Math]::Max(1, $end - $start)
+      $sumSq = 0.0
+      $crossings = 0
+      $prev = $monoSamples[$start]
+
+      for ($i = $start; $i -lt $end; $i++) {
+        $current = $monoSamples[$i]
+        $sumSq += $current * $current
+        if ($i -gt $start) {
+          if (($prev -lt 0.0 -and $current -ge 0.0) -or ($prev -ge 0.0 -and $current -lt 0.0)) {
+            $crossings += 1
+          }
+        }
+        $prev = $current
+      }
+
+      $rms = [Math]::Sqrt($sumSq / [double]$count)
+      $zcr = 0.0
+      if ($count -gt 1) {
+        $zcr = [double]$crossings / [double]($count - 1)
+      }
+      if ($zcr -gt $maxZcr) { $maxZcr = $zcr }
+      if ($rms -gt $maxFrameRms) { $maxFrameRms = $rms }
+      if ($zcr -ge $HighZcrThreshold -and $rms -ge $HarshRmsThreshold) {
+        $highZcrFrameCount += 1
+      }
     }
 
     [pscustomobject]@{
@@ -85,6 +131,12 @@ function Read-Pcm16WavMetrics([string]$Path) {
       samples = [int64]($audioBytes.Count / 2 / [Math]::Max(1, $channels))
       duration_sec = [double]($audioBytes.Count / 2 / [Math]::Max(1, $channels)) / [double]$sampleRate
       peak = $peak
+      frame_ms = $FrameMs
+      high_zcr_threshold = $HighZcrThreshold
+      harsh_rms_threshold = $HarshRmsThreshold
+      high_zcr_frame_count = $highZcrFrameCount
+      max_zcr = $maxZcr
+      max_frame_rms = $maxFrameRms
     }
   } finally {
     $reader.Dispose()
@@ -128,7 +180,25 @@ function Assert-Metrics([string]$MetricsPath, [string]$WavPath, [bool]$ExpectedC
     throw "real clone metrics must include clone_reference_polish"
   }
 
-  Write-Host ("validated {0}: {1} Hz, {2:n2}s, peak={3:n4}" -f $WavPath, $wav.sample_rate, $wav.duration_sec, $wav.peak) -ForegroundColor Green
+  $qualityPath = [IO.Path]::ChangeExtension($MetricsPath, ".quality.json")
+  [ordered]@{
+    wav_path = (Resolve-Path -LiteralPath $WavPath).Path
+    metrics_path = (Resolve-Path -LiteralPath $MetricsPath).Path
+    sample_rate = $wav.sample_rate
+    channels = $wav.channels
+    bits_per_sample = $wav.bits_per_sample
+    samples = $wav.samples
+    duration_sec = $wav.duration_sec
+    peak = $wav.peak
+    frame_ms = $wav.frame_ms
+    high_zcr_threshold = $wav.high_zcr_threshold
+    harsh_rms_threshold = $wav.harsh_rms_threshold
+    high_zcr_frame_count = $wav.high_zcr_frame_count
+    max_zcr = $wav.max_zcr
+    max_frame_rms = $wav.max_frame_rms
+  } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $qualityPath -Encoding UTF8
+
+  Write-Host ("validated {0}: {1} Hz, {2:n2}s, peak={3:n4}, high_zcr_frames={4}, max_zcr={5:n4}" -f $WavPath, $wav.sample_rate, $wav.duration_sec, $wav.peak, $wav.high_zcr_frame_count, $wav.max_zcr) -ForegroundColor Green
 }
 
 $promptPath = Resolve-Path -LiteralPath $PromptSet
@@ -183,4 +253,4 @@ if (-not $SkipClone) {
 }
 
 Write-Host ""
-Write-Host "Audio quality gate completed. ASR transcript comparison is the next acceptance layer for real model outputs." -ForegroundColor Green
+Write-Host "Audio quality gate completed. Frame-level quality sidecars are ready; ASR transcript comparison is the next acceptance layer for real model outputs." -ForegroundColor Green

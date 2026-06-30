@@ -78,8 +78,10 @@
 
 - WAV 為 48 kHz mono、finite、non-empty。
 - peak <= 0.95，無 NaN/Inf，無 clipping。
+- harness 會為每個 `*.metrics.json` 旁輸出 `*.metrics.quality.json`，包含 20ms frame 的
+  `high_zcr_frame_count`、`max_zcr`、`max_frame_rms` 與對應 threshold。
 - quiet_rms 不高於前一個 accepted baseline。
-- high-ZCR / 4-8kHz burst frame 數不高於前一個 accepted baseline。
+- high-ZCR / 4-8kHz burst proxy frame 數不高於前一個 accepted baseline。
 - ASR transcript 與原文高度一致；至少不得漏掉主要詞：「普通话」、「语音质量」、「刺耳杂音」。
 
 ## G3 - Clone reference noise gate

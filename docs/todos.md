@@ -73,6 +73,7 @@
 - [x] 修正 Mandarin 中段刺耳雜音：針對 high-ZCR 4–8kHz broadband burst 加入局部 harsh midband smoother，保留 ASR 可辨識度。
 - [x] CLI 音訊 metrics artifact：`synth`/`clone` 支援 `--metrics-out`，可保存 sample rate、samples、device、dry_run、clone 標記與 speech polish JSON。
 - [x] Mandarin/clone 音質 gate harness：新增固定 seed 99 簡體中文 prompt set 與 `harness/audio_quality_gate.ps1`，可產生 WAV/metrics 並做基本結構與 headroom 檢查。
+- [x] 音質 gate sidecar：`harness/audio_quality_gate.ps1` 會輸出 20ms frame-level `*.metrics.quality.json`，記錄 high-ZCR/harsh-frame proxy、max ZCR 與 frame RMS，協助定位中段刺耳雜音。
 
 ## Milestone I：egui
 
