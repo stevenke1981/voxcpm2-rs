@@ -36,6 +36,9 @@ enum Command {
         t_scheduler: String,
         #[arg(long)]
         latent_norm: Option<f64>,
+        /// Write machine-readable synthesis metrics JSON.
+        #[arg(long)]
+        metrics_out: Option<PathBuf>,
         #[arg(long)]
         dry_run: bool,
         #[arg(long, default_value_t = true)]
@@ -70,6 +73,9 @@ enum Command {
         t_scheduler: String,
         #[arg(long)]
         latent_norm: Option<f64>,
+        /// Write machine-readable synthesis metrics JSON.
+        #[arg(long)]
+        metrics_out: Option<PathBuf>,
         /// Clone strength (0.0 = text-only, 1.0 = full clone).
         #[arg(long, default_value_t = 1.0)]
         clone_strength: f64,
@@ -119,6 +125,7 @@ fn main() -> anyhow::Result<()> {
             label_ai_generated,
             t_scheduler,
             latent_norm,
+            metrics_out,
         } => {
             let mut pipe = VoxPipeline::new(&device, model_dir.as_deref(), dry_run)?;
             let req = SynthRequest {
@@ -139,6 +146,7 @@ fn main() -> anyhow::Result<()> {
                 ref_audio_path: None,
                 ref_transcript: None,
                 clone_strength: 1.0,
+                metrics_output_path: metrics_out,
             };
             let result = pipe.synthesize(&req, None)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
@@ -159,6 +167,7 @@ fn main() -> anyhow::Result<()> {
             label_ai_generated,
             t_scheduler,
             latent_norm,
+            metrics_out,
             clone_strength,
             i_have_consent,
         } => {
@@ -182,6 +191,7 @@ fn main() -> anyhow::Result<()> {
                 ref_audio_path: Some(ref_audio),
                 ref_transcript: None,
                 clone_strength,
+                metrics_output_path: metrics_out,
             };
             let result = pipe.synthesize(&req, None)?;
             println!("{}", serde_json::to_string_pretty(&result)?);

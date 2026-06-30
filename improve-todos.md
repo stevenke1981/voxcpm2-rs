@@ -37,10 +37,10 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
 
 ## P1 - 音訊品質回歸
 
-- [ ] **把 speech polish 量測輸出改成機器可讀報告**
-  - `audio.rs` 已回傳 `AudioPolishReport`，目前主要以 stderr 顯示。
-  - 新增 `--metrics-out` 或測試 harness 解析輸出，保存 JSON。
+- [x] **把 speech polish 量測輸出改成機器可讀報告**
+  - `audio.rs` 已回傳 `AudioPolishReport`；`synth`/`clone` CLI 已新增 `--metrics-out` 保存 JSON。
   - 驗收：每次 synth/clone 都可取得 dc、peak、quiet_rms、bg_gate、harsh_frames。
+  - 狀態：已補 dry-run metrics 測試；真實模型 gate 需在 G2/G3 輸出 accepted baseline。
 
 - [ ] **針對中段雜音建立 fixture**
   - 以 `mandarin_bg_gate_seed99.wav` 症狀為模式，建立 high-ZCR / 4-8kHz burst 檢查。

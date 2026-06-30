@@ -97,6 +97,7 @@ cargo run -p voxcpm2-cli --features cpu -- clone `
   --ref-audio fixtures/ref.wav `
   --text "这是授权声音复制测试。" `
   --i-have-consent `
+  --metrics-out output/clone.metrics.json `
   --out output/clone.wav
 ```
 

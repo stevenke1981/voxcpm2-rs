@@ -57,6 +57,9 @@ pub struct SynthRequest {
     /// Blends the reference audio feat_embeds with zeros.
     #[serde(default = "default_clone_strength")]
     pub clone_strength: f64,
+    /// Optional JSON output path for machine-readable audio metrics.
+    #[serde(default)]
+    pub metrics_output_path: Option<PathBuf>,
 }
 
 fn default_clone_strength() -> f64 {
@@ -87,6 +90,7 @@ impl Default for SynthRequest {
             ref_audio_path: None,
             ref_transcript: None,
             clone_strength: 1.0,
+            metrics_output_path: None,
         }
     }
 }
@@ -98,6 +102,18 @@ pub struct SynthResult {
     pub samples: usize,
     pub device: String,
     pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SynthMetricsReport {
+    pub output_path: PathBuf,
+    pub sample_rate: u32,
+    pub samples: usize,
+    pub device: String,
+    pub dry_run: bool,
+    pub is_clone: bool,
+    pub label_ai_generated: bool,
+    pub polish: Option<audio::AudioPolishReport>,
 }
 
 /// Cached model weights to avoid reloading from disk on every inference call.
@@ -273,6 +289,7 @@ impl VoxPipeline {
             }
         }
 
+        let mut polish_report = None;
         if !req.dry_run {
             let polish = audio::polish_generated_speech(&mut samples, sample_rate);
             eprintln!(
@@ -286,17 +303,36 @@ impl VoxPipeline {
                 polish.background_gate_threshold,
                 polish.harsh_frames_smoothed
             );
+            polish_report = Some(polish);
         }
 
         audio::check_audio(&samples)?;
         audio::write_wav_f32(&req.output_path, &samples, sample_rate)?;
-        Ok(SynthResult {
+        let result = SynthResult {
             output_path: req.output_path.clone(),
             sample_rate,
             samples: samples.len(),
             device: device::device_label(&self.device),
             dry_run: req.dry_run,
-        })
+        };
+
+        if let Some(metrics_path) = &req.metrics_output_path {
+            write_metrics_report(
+                metrics_path,
+                &SynthMetricsReport {
+                    output_path: result.output_path.clone(),
+                    sample_rate: result.sample_rate,
+                    samples: result.samples,
+                    device: result.device.clone(),
+                    dry_run: result.dry_run,
+                    is_clone: req.ref_audio_path.is_some(),
+                    label_ai_generated: req.label_ai_generated,
+                    polish: polish_report,
+                },
+            )?;
+        }
+
+        Ok(result)
     }
 
     /// Real VoxCPM2 inference pipeline:
@@ -909,6 +945,15 @@ fn tensor_peak(t: &Tensor) -> anyhow::Result<f32> {
         .to_vec0::<f32>()?)
 }
 
+fn write_metrics_report(path: &Path, report: &SynthMetricsReport) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(report)?;
+    std::fs::write(path, format!("{json}\n"))?;
+    Ok(())
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -930,6 +975,43 @@ mod tests {
     fn traditional_chinese_hint_detects_mandarin_prompt_risk() {
         assert!(looks_like_traditional_chinese_hint("你好，這是語音測試。"));
         assert!(!looks_like_traditional_chinese_hint("你好，这是语音测试。"));
+    }
+
+    #[test]
+    fn dry_run_writes_metrics_report() -> anyhow::Result<()> {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("voxcpm2-metrics-{unique}"));
+        let wav_path = base.with_extension("wav");
+        let metrics_path = base.with_extension("json");
+
+        let mut pipe = VoxPipeline::new("cpu", None, true)?;
+        let req = SynthRequest {
+            text: "metrics smoke".into(),
+            model_dir: None,
+            output_path: wav_path.clone(),
+            device: "cpu".into(),
+            dry_run: true,
+            metrics_output_path: Some(metrics_path.clone()),
+            ..SynthRequest::default()
+        };
+
+        let result = pipe.synthesize(&req, None)?;
+        assert!(wav_path.exists());
+        assert!(metrics_path.exists());
+        assert_eq!(result.output_path, wav_path);
+
+        let metrics = std::fs::read_to_string(&metrics_path)?;
+        let value: serde_json::Value = serde_json::from_str(&metrics)?;
+        assert_eq!(value["dry_run"], true);
+        assert_eq!(value["is_clone"], false);
+        assert!(value["polish"].is_null());
+        assert_eq!(value["samples"], result.samples);
+
+        let _ = std::fs::remove_file(wav_path);
+        let _ = std::fs::remove_file(metrics_path);
+        Ok(())
     }
 
     /// Verify the full pipeline shapes with real model weights.

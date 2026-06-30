@@ -58,6 +58,7 @@
   --model-dir models\VoxCPM2 `
   --text "这是普通话语音质量回归测试，中间不应该出现刺耳杂音。" `
   --out output\mandarin_seed99.wav `
+  --metrics-out output\mandarin_seed99.metrics.json `
   --steps 30 --seed 99 --device cuda
 ```
 
@@ -84,6 +85,7 @@
   --text "这是声音复制的噪声回归测试。" `
   --i-have-consent `
   --out output\clone_noisy_ref_seed99.wav `
+  --metrics-out output\clone_noisy_ref_seed99.metrics.json `
   --steps 30 --seed 99 --device cuda
 ```
 

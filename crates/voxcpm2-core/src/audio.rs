@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Lowpass cutoff for hiss reduction (12kHz, preserves full speech band).
@@ -21,7 +22,7 @@ const FADE_IN_MS: f32 = 5.0;
 const FADE_OUT_MS: f32 = 12.0;
 const PCM_HEADROOM: f32 = 0.95;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct AudioPolishReport {
     pub dc_offset: f32,
     pub peak_before: f32,

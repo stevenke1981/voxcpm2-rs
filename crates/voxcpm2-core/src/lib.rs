@@ -13,6 +13,6 @@ pub use assets::{
     AssetReport, AssetStatus, FixInstruction, SafetensorsManifest,
 };
 pub use config::{LocalConfig, VoxConfig};
-pub use pipeline::{SynthRequest, SynthResult, VoxPipeline};
+pub use pipeline::{SynthMetricsReport, SynthRequest, SynthResult, VoxPipeline};
 pub use tokenizer::{ChatMessage, SpecialTokens, VoxTokenizer};
 pub use weights::{load_audiovae_vb, load_main_vb, load_text_to_dit_projections};
