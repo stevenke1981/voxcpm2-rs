@@ -85,6 +85,7 @@
 - [ ] Diagnostics tab。
 - [ ] Background worker thread。
 - [ ] Cancel generation。
+- [x] Clone tab safety/metrics gate：GUI clone 需勾選 reference voice consent 才可送出，synth/clone 會在輸出 WAV 旁寫入 `*.metrics.json`。
 
 ## Milestone J：Release
 

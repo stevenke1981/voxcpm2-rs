@@ -7,6 +7,8 @@ use std::sync::{
 };
 use voxcpm2_core::SynthRequest;
 
+use super::metrics_path_for_output;
+
 #[derive(Default)]
 pub struct SynthTab {
     pub text: String,
@@ -24,7 +26,13 @@ pub struct SynthTab {
 }
 
 impl SynthTab {
-    pub fn ui(&mut self, ui: &mut egui::Ui, model_dir: &str, device_str: &str, cancel_flag: &Arc<AtomicBool>) {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        model_dir: &str,
+        device_str: &str,
+        cancel_flag: &Arc<AtomicBool>,
+    ) {
         ui.heading("Synthesis");
 
         ui.horizontal(|ui| {
@@ -75,14 +83,12 @@ impl SynthTab {
                 cancel_flag.store(true, Ordering::SeqCst);
             }
         } else {
-            let btn = egui::Button::new("Generate")
-                .fill(egui::Color32::from_rgb(0, 120, 200));
+            let btn = egui::Button::new("Generate").fill(egui::Color32::from_rgb(0, 120, 200));
             if ui.add(btn).clicked() {
                 let seed_parsed = self.seed.trim().parse::<u64>().ok();
                 let req = SynthRequest {
                     text: self.text.clone(),
-                    voice_design: Some(self.voice_design.clone())
-                        .filter(|s| !s.is_empty()),
+                    voice_design: Some(self.voice_design.clone()).filter(|s| !s.is_empty()),
                     model_dir: Some(std::path::PathBuf::from(model_dir)),
                     output_path: std::path::PathBuf::from(&self.output_path),
                     device: device_str.to_string(),
@@ -98,6 +104,7 @@ impl SynthTab {
                     ref_audio_path: None,
                     ref_transcript: None,
                     clone_strength: 1.0,
+                    metrics_output_path: Some(metrics_path_for_output(&self.output_path)),
                 };
                 self.pending_generate = Some(req);
                 self.generate_disabled = true;

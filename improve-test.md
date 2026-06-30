@@ -173,6 +173,7 @@
 - Synth tab 產生 seed 99 Mandarin WAV。
 - Clone tab 未勾 consent 時不可送出。
 - 勾 consent 並指定 reference 後可送出。
+- Synth/Clone tab 送出時會在輸出 WAV 旁建立 `*.metrics.json`。
 - Cancel 能停止長時間推論並回報取消位置。
 
 通過條件：

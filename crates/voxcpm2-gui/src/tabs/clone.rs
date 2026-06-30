@@ -10,6 +10,8 @@ use std::sync::{
 };
 use voxcpm2_core::SynthRequest;
 
+use super::metrics_path_for_output;
+
 pub struct CloneTab {
     /// Path to reference WAV file.
     pub ref_audio_path: String,
@@ -31,6 +33,8 @@ pub struct CloneTab {
     pub t_scheduler: String,
     /// Status message shown to the user.
     pub status: String,
+    /// User confirmation that the reference voice is authorized.
+    pub has_voice_consent: bool,
     /// Disables the clone button while generating.
     pub generate_disabled: bool,
     /// Set to Some(true) when user clicks Clone Voice.
@@ -50,6 +54,7 @@ impl Default for CloneTab {
             output_path: String::new(),
             seed: String::new(),
             status: String::new(),
+            has_voice_consent: false,
             generate_disabled: false,
             pending_generate: None,
         }
@@ -57,7 +62,25 @@ impl Default for CloneTab {
 }
 
 impl CloneTab {
-    pub fn ui(&mut self, ui: &mut egui::Ui, model_dir: &str, device_str: &str, cancel_flag: &Arc<AtomicBool>) {
+    fn has_reference_audio(&self) -> bool {
+        !self.ref_audio_path.is_empty() && PathBuf::from(&self.ref_audio_path).exists()
+    }
+
+    fn has_synthesis_text(&self) -> bool {
+        !self.text.trim().is_empty()
+    }
+
+    fn can_generate(&self) -> bool {
+        self.has_reference_audio() && self.has_synthesis_text() && self.has_voice_consent
+    }
+
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        model_dir: &str,
+        device_str: &str,
+        cancel_flag: &Arc<AtomicBool>,
+    ) {
         ui.heading("Voice Cloning");
 
         // ── Reference audio ──
@@ -89,10 +112,7 @@ impl CloneTab {
             ui.add(egui::Slider::new(&mut self.steps, 1..=100).text("Steps"));
         });
         ui.horizontal(|ui| {
-            ui.add(
-                egui::Slider::new(&mut self.similarity, 0.0..=1.0)
-                    .text("Clone strength"),
-            );
+            ui.add(egui::Slider::new(&mut self.similarity, 0.0..=1.0).text("Clone strength"));
             ui.label("(0=text-only, 1=full clone)");
         });
         ui.horizontal(|ui| {
@@ -122,6 +142,11 @@ impl CloneTab {
 
         ui.separator();
 
+        ui.checkbox(
+            &mut self.has_voice_consent,
+            "I have rights/consent to use this reference voice",
+        );
+
         // ── Clone / Cancel button ──
         ui.horizontal(|ui| {
             if self.generate_disabled {
@@ -136,22 +161,23 @@ impl CloneTab {
                     cancel_flag.store(true, Ordering::SeqCst);
                 }
             } else {
-                let has_ref = !self.ref_audio_path.is_empty() && PathBuf::from(&self.ref_audio_path).exists();
-                let has_text = !self.text.trim().is_empty();
-                let enabled = has_ref && has_text;
-                let tip = if !has_ref {
+                let has_ref = self.has_reference_audio();
+                let has_text = self.has_synthesis_text();
+                let enabled = self.can_generate();
+                let tip = if !self.has_voice_consent {
+                    "Confirm voice rights/consent before cloning"
+                } else if !has_ref {
                     "Select a reference audio WAV file"
                 } else if !has_text {
                     "Enter text for the cloned voice to speak"
                 } else {
                     "Generate cloned speech"
                 };
-                let btn = egui::Button::new("Clone Voice")
-                    .fill(if enabled {
-                        egui::Color32::from_rgb(0, 120, 200)
-                    } else {
-                        egui::Color32::from_rgb(80, 80, 80)
-                    });
+                let btn = egui::Button::new("Clone Voice").fill(if enabled {
+                    egui::Color32::from_rgb(0, 120, 200)
+                } else {
+                    egui::Color32::from_rgb(80, 80, 80)
+                });
                 if ui.add_enabled(enabled, btn).on_hover_text(tip).clicked() {
                     let ref_path = std::path::PathBuf::from(&self.ref_audio_path);
                     let transcript = if self.ref_transcript.is_empty() {
@@ -178,6 +204,7 @@ impl CloneTab {
                         ref_audio_path: Some(ref_path),
                         ref_transcript: transcript,
                         clone_strength: self.similarity as f64,
+                        metrics_output_path: Some(metrics_path_for_output(&self.output_path)),
                     };
                     self.pending_generate = Some(req);
                     self.generate_disabled = true;
@@ -201,5 +228,32 @@ impl CloneTab {
             ui.separator();
             ui.label(&self.status);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_requires_reference_text_and_consent() -> anyhow::Result<()> {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let ref_path = std::env::temp_dir().join(format!("voxcpm2-gui-ref-{unique}.wav"));
+        std::fs::write(&ref_path, [])?;
+
+        let mut tab = CloneTab {
+            ref_audio_path: ref_path.display().to_string(),
+            text: "authorized clone test".into(),
+            ..CloneTab::default()
+        };
+
+        assert!(!tab.can_generate());
+        tab.has_voice_consent = true;
+        assert!(tab.can_generate());
+
+        let _ = std::fs::remove_file(ref_path);
+        Ok(())
     }
 }

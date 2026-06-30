@@ -80,6 +80,7 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
   - GUI clone tab 必須同 CLI 一樣要求 consent，並顯示生成語音標示狀態。
   - Background worker、cancel、model cache 不可因新增 gate regression。
   - 驗收：GUI smoke 能完成 synth、clone、cancel，錯誤訊息不吞掉底層 shape/audio diagnostics。
+  - 狀態：已補 GUI clone consent checkbox 與 synth/clone metrics sidecar path；仍需人工或自動 GUI smoke。
 
 - [ ] **Release package hygiene**
   - 參考 C++ repo 的 `scripts/build-release.ps1`：隔離 build、跑 gate、打包不含模型/WAV/fixture。
