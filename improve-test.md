@@ -53,6 +53,20 @@
 
 ## G2 - Mandarin synth audio gate
 
+CLI language-risk smoke：
+
+```powershell
+.\run_with_vs.cmd cargo run -p voxcpm2-cli --features cpu -- synth `
+  --text "你好，這是語音測試。" `
+  --out output\traditional_hint_smoke.wav `
+  --dry-run
+```
+
+通過條件：
+
+- stderr 包含 `Traditional Chinese text detected` 與 `Simplified Chinese text`。
+- 使用簡體中文 `你好，这是语音测试。` 時不輸出該語言風險提示。
+
 可直接使用 harness 跑固定 prompt set：
 
 ```powershell

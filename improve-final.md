@@ -16,11 +16,23 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 
 與 `voxcpm-cpp` 相比，Rust 目前的主要缺口不是「能不能出聲」，而是：
 
-1. voice clone consent 尚未在 CLI 強制執行。
+1. voice clone consent 尚未形成 CLI/GUI/文件/測試的完整 release gate。
 2. clone 模式尚未完整覆蓋 reference-only、prompt-only continuation、combined。
 3. 音訊品質修正尚未形成固定 WAV metrics + ASR + backend matrix 的 release gate。
 4. GUI 與 CLI 還需要共用同一套 safety/quality gate。
 5. release package hygiene 尚未像 C++ repo 一樣明確排除模型、WAV、fixtures、debug dump。
+
+## 2026-07-01 進度更新
+
+已完成的下一步改善：
+
+- CLI clone 已強制 `--i-have-consent`，未授權時不載入模型也不產生 WAV。
+- `synth` / `clone` 已支援 `--metrics-out`，可保存 speech polish 與 clone reference polish JSON。
+- `harness/audio_quality_gate.ps1` 已可跑 seed 99 Mandarin prompt set、clone dry-run、WAV 結構/headroom gate，
+  並輸出 frame-level `*.metrics.quality.json`。
+- GUI clone tab 已加入 reference voice consent checkbox；GUI synth/clone 會建立 metrics sidecar。
+- 繁體中文語言風險提示已移到共用 `synthesize()` 入口，dry-run CLI smoke 也會提示；
+  簡體中文 Mandarin 基準不誤觸。
 
 ## 最終完成定義
 
@@ -51,4 +63,5 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 
 ## 下一個 commit 建議
 
-下一個實作 commit 建議只做一件事：新增 `--i-have-consent` 到 Rust CLI clone，並補 CLI 測試或 smoke script。這能最快縮小與 C++ 參考實作的安全差距，也不會干擾目前音訊品質修正。
+下一個實作 commit 建議只做一件事：建立 clone reference fixture gate，覆蓋 clean/noisy/long reference
+的 reference polish 與 trim 診斷。這會直接縮小 clone 背景噪音回歸風險，且不需要先擴大到完整 backend matrix。

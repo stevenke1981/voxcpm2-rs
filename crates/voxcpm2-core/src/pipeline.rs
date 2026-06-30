@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+const TRADITIONAL_CHINESE_MANDARIN_WARNING: &str = "Traditional Chinese text detected; VoxCPM2 may bias toward Cantonese. For Mandarin, use Simplified Chinese text.";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SynthRequest {
     pub text: String,
@@ -263,6 +265,10 @@ impl VoxPipeline {
             .map(|c| c.audio_vae_config.out_sample_rate)
             .unwrap_or(48_000);
 
+        if let Some(warning) = language_prompt_warning(&req.text, req.voice_design.as_deref()) {
+            eprintln!("  [lang] {warning}");
+        }
+
         let mut clone_reference_polish = None;
         let mut samples = if req.dry_run {
             audio::smoke_tone(&req.text, sample_rate)
@@ -400,12 +406,6 @@ impl VoxPipeline {
         // ── Tokenizer (cached) ──
         let tokenizer = cache.tokenizer.clone();
         let target_text = build_voice_design_text(&req.text, req.voice_design.as_deref());
-        if looks_like_traditional_chinese_hint(&target_text) {
-            eprintln!(
-                "  [lang] Traditional Chinese text detected; VoxCPM2 may bias toward Cantonese. \
-                 For Mandarin, use Simplified Chinese text."
-            );
-        }
         let tokens = tokenizer.encode_zero_shot(&target_text)?;
         if tokens.is_empty() {
             anyhow::bail!("tokenizer returned empty tokens");
@@ -924,6 +924,15 @@ fn build_voice_design_text(text: &str, voice_design: Option<&str>) -> String {
     }
 }
 
+pub fn language_prompt_warning(text: &str, voice_design: Option<&str>) -> Option<&'static str> {
+    let target_text = build_voice_design_text(text, voice_design);
+    if looks_like_traditional_chinese_hint(&target_text) {
+        Some(TRADITIONAL_CHINESE_MANDARIN_WARNING)
+    } else {
+        None
+    }
+}
+
 fn looks_like_traditional_chinese_hint(text: &str) -> bool {
     const TRADITIONAL_HINTS: &[char] = &[
         '這', '語', '聲', '請', '確', '認', '淨', '體', '測', '試', '雜', '會', '廣', '東', '國',
@@ -993,6 +1002,15 @@ mod tests {
     fn traditional_chinese_hint_detects_mandarin_prompt_risk() {
         assert!(looks_like_traditional_chinese_hint("你好，這是語音測試。"));
         assert!(!looks_like_traditional_chinese_hint("你好，这是语音测试。"));
+    }
+
+    #[test]
+    fn language_prompt_warning_is_stable_for_cli_smoke() {
+        let warning = language_prompt_warning("你好，這是語音測試。", None).unwrap();
+        assert!(warning.contains("Traditional Chinese"));
+        assert!(warning.contains("Simplified Chinese"));
+        assert!(language_prompt_warning("你好，这是语音测试。", None).is_none());
+        assert!(language_prompt_warning("你好，这是语音测试。", Some("溫暖聲音")).is_some());
     }
 
     #[test]

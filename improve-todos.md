@@ -32,10 +32,12 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
   - 狀態：已新增 `tests/golden/mandarin_regression_prompts.json` 與 `harness/audio_quality_gate.ps1`；
     目前可產生 WAV/metrics 並做結構檢查，ASR transcript 比對仍是下一層 gate。
 
-- [ ] **保留繁體中文風險提示並加測試**
+- [x] **保留繁體中文風險提示並加測試**
   - 目前 `pipeline.rs` 已有 Traditional Chinese hint detection。
   - 增加 CLI smoke，確認偵測時會提示「若要 Mandarin 請用簡體中文」。
   - 驗收：提示只對繁體提示觸發，簡體 Mandarin 基準不觸發。
+  - 狀態：已將語言風險提示移到 `synthesize()` 共用入口，dry-run CLI smoke 也會提示；
+    已補單元測試覆蓋繁體文字、voice design 與簡體 Mandarin 不誤觸。
 
 ## P1 - 音訊品質回歸
 
