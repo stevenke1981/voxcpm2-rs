@@ -33,6 +33,8 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 - GUI clone tab 已加入 reference voice consent checkbox；GUI synth/clone 會建立 metrics sidecar。
 - 繁體中文語言風險提示已移到共用 `synthesize()` 入口，dry-run CLI smoke 也會提示；
   簡體中文 Mandarin 基準不誤觸。
+- Clone reference 已有 clean/noisy/long synthetic fixture gate，並在 clone metrics 中輸出
+  `clone_reference_trim` 以記錄長 reference 裁切診斷。
 
 ## 最終完成定義
 
@@ -63,5 +65,6 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 
 ## 下一個 commit 建議
 
-下一個實作 commit 建議只做一件事：建立 clone reference fixture gate，覆蓋 clean/noisy/long reference
-的 reference polish 與 trim 診斷。這會直接縮小 clone 背景噪音回歸風險，且不需要先擴大到完整 backend matrix。
+下一個實作 commit 建議只做一件事：建立真實模型 accepted baseline artifact，將 seed 99 Mandarin
+synth/clone 的 metrics、quality sidecar、ASR transcript 與 commit hash 寫入 acceptance report。這能把目前
+已完成的 safety/quality gate 從 smoke 測試推進到發布驗收證據。

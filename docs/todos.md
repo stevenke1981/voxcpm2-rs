@@ -75,6 +75,7 @@
 - [x] Mandarin/clone 音質 gate harness：新增固定 seed 99 簡體中文 prompt set 與 `harness/audio_quality_gate.ps1`，可產生 WAV/metrics 並做基本結構與 headroom 檢查。
 - [x] 音質 gate sidecar：`harness/audio_quality_gate.ps1` 會輸出 20ms frame-level `*.metrics.quality.json`，記錄 high-ZCR/harsh-frame proxy、max ZCR 與 frame RMS，協助定位中段刺耳雜音。
 - [x] Mandarin 輸入語言 gate：繁體中文或 voice design 含繁體提示時，CLI/GUI 共用 pipeline 會提示可能偏向廣東話；簡體中文 Mandarin 基準不誤觸。
+- [x] Clone reference fixture gate：clean/noisy/long synthetic reference 單元測試覆蓋 reference polish、speech preservation 與 30 秒 trim 診斷；clone metrics 會輸出 `clone_reference_trim`。
 
 ## Milestone I：egui
 

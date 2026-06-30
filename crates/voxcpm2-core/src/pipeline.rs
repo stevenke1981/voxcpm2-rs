@@ -117,11 +117,13 @@ pub struct SynthMetricsReport {
     pub label_ai_generated: bool,
     pub polish: Option<audio::AudioPolishReport>,
     pub clone_reference_polish: Option<audio::AudioPolishReport>,
+    pub clone_reference_trim: Option<audio::CloneReferenceTrimReport>,
 }
 
 struct RealSynthesisResult {
     samples: Vec<f32>,
     clone_reference_polish: Option<audio::AudioPolishReport>,
+    clone_reference_trim: Option<audio::CloneReferenceTrimReport>,
 }
 
 /// Cached model weights to avoid reloading from disk on every inference call.
@@ -270,6 +272,7 @@ impl VoxPipeline {
         }
 
         let mut clone_reference_polish = None;
+        let mut clone_reference_trim = None;
         let mut samples = if req.dry_run {
             audio::smoke_tone(&req.text, sample_rate)
         } else {
@@ -282,6 +285,7 @@ impl VoxPipeline {
             self.ensure_cache(model_dir, is_clone)?;
             let real = self.synthesize_real(req, model_dir, sample_rate, cancel)?;
             clone_reference_polish = real.clone_reference_polish;
+            clone_reference_trim = real.clone_reference_trim;
             real.samples
         };
 
@@ -344,6 +348,7 @@ impl VoxPipeline {
                     label_ai_generated: req.label_ai_generated,
                     polish: polish_report,
                     clone_reference_polish,
+                    clone_reference_trim,
                 },
             )?;
         }
@@ -416,6 +421,7 @@ impl VoxPipeline {
         // We'll store the result here and use it during AR generation.
         let mut clone_prefix: Option<RefPrefixResult> = None;
         let mut clone_reference_polish = None;
+        let mut clone_reference_trim = None;
 
         let input_ids = if let Some(ref_path) = &req.ref_audio_path {
             // Load TSLM first (needed for embed_text in encode_ref_prefix)
@@ -441,6 +447,7 @@ impl VoxPipeline {
             let n_patches = prefix.n_patches;
             let combined_seq_len = prefix.combined_ids.dim(1)?;
             clone_reference_polish = Some(prefix.reference_polish);
+            clone_reference_trim = prefix.reference_trim;
             let combined_ids = prefix.combined_ids.clone();
             clone_prefix = Some(prefix);
             eprintln!(
@@ -670,6 +677,7 @@ impl VoxPipeline {
         Ok(RealSynthesisResult {
             samples: vals,
             clone_reference_polish,
+            clone_reference_trim,
         })
     }
 }
@@ -686,6 +694,8 @@ pub struct RefPrefixResult {
     pub n_patches: usize,
     /// Audio cleanup metrics measured before AudioVAE reference encoding.
     pub reference_polish: audio::AudioPolishReport,
+    /// Optional trim diagnostics measured before AudioVAE reference encoding.
+    pub reference_trim: Option<audio::CloneReferenceTrimReport>,
 }
 
 /// Encode a reference audio file and build the combined prefix for voice cloning.
@@ -744,17 +754,17 @@ pub fn encode_ref_prefix(
         ref_polish.background_gate_threshold,
         ref_polish.harsh_frames_smoothed
     );
-    // Auto-trim to MAX_REF_SECS to prevent CUDA OOM in AudioVAE encoder
-    // (model.1 conv creates [1, 2048, T], ~23 GB for 178s audio).
-    const MAX_REF_SECS: f64 = 30.0;
-    let max_samples = (MAX_REF_SECS * 16000.0) as usize;
-    if samples_16k.len() > max_samples {
+    // Auto-trim long references to prevent CUDA OOM in AudioVAE encoder.
+    // model.1 conv can create very large [1, 2048, T] tensors for minute-long inputs.
+    let reference_trim = audio::trim_clone_reference_audio(&mut samples_16k, 16000);
+    if let Some(trim) = reference_trim {
         eprintln!(
-            "  [clone] trimming {} samples ({:.2}s) → {max_samples} samples ({MAX_REF_SECS}s) to prevent OOM",
-            samples_16k.len(),
-            samples_16k.len() as f64 / 16000.0,
+            "  [clone] trimming {} samples ({:.2}s) → {} samples ({:.2}s) to prevent OOM",
+            trim.original_samples,
+            trim.original_duration_sec,
+            trim.trimmed_samples,
+            trim.max_duration_sec,
         );
-        samples_16k.truncate(max_samples);
     }
     let audio_t =
         Tensor::from_slice(&samples_16k, &[1, 1, samples_16k.len()], dev)?.to_dtype(DType::F32)?;
@@ -914,6 +924,7 @@ pub fn encode_ref_prefix(
         feat_embeds,
         n_patches,
         reference_polish: ref_polish,
+        reference_trim,
     })
 }
 
@@ -1044,6 +1055,7 @@ mod tests {
         assert_eq!(value["is_clone"], false);
         assert!(value["polish"].is_null());
         assert!(value["clone_reference_polish"].is_null());
+        assert!(value["clone_reference_trim"].is_null());
         assert_eq!(value["samples"], result.samples);
 
         let _ = std::fs::remove_file(wav_path);

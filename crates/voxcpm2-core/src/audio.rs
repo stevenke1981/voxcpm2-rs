@@ -21,6 +21,7 @@ const HARSH_MAX_BLEND: f32 = 0.70;
 const FADE_IN_MS: f32 = 5.0;
 const FADE_OUT_MS: f32 = 12.0;
 const PCM_HEADROOM: f32 = 0.95;
+pub const MAX_CLONE_REFERENCE_SECS: f64 = 30.0;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct AudioPolishReport {
@@ -32,6 +33,15 @@ pub struct AudioPolishReport {
     pub quiet_rms_after: f32,
     pub background_gate_threshold: f32,
     pub harsh_frames_smoothed: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct CloneReferenceTrimReport {
+    pub original_samples: usize,
+    pub trimmed_samples: usize,
+    pub sample_rate: u32,
+    pub max_duration_sec: f64,
+    pub original_duration_sec: f64,
 }
 
 /// Load a mono WAV file and return (samples, sample_rate).
@@ -215,6 +225,29 @@ pub fn polish_clone_reference_audio(samples: &mut [f32], sample_rate: u32) -> Au
         background_gate_threshold,
         harsh_frames_smoothed,
     }
+}
+
+pub fn trim_clone_reference_audio(
+    samples: &mut Vec<f32>,
+    sample_rate: u32,
+) -> Option<CloneReferenceTrimReport> {
+    if sample_rate == 0 {
+        return None;
+    }
+    let max_samples = (MAX_CLONE_REFERENCE_SECS * sample_rate as f64) as usize;
+    if samples.len() <= max_samples {
+        return None;
+    }
+
+    let report = CloneReferenceTrimReport {
+        original_samples: samples.len(),
+        trimmed_samples: max_samples,
+        sample_rate,
+        max_duration_sec: MAX_CLONE_REFERENCE_SECS,
+        original_duration_sec: samples.len() as f64 / sample_rate as f64,
+    };
+    samples.truncate(max_samples);
+    Some(report)
 }
 
 pub fn smoke_tone(text: &str, sample_rate: u32) -> Vec<f32> {
@@ -600,6 +633,41 @@ mod tests {
     }
 
     #[test]
+    fn clone_reference_fixture_matrix_covers_clean_noisy_and_long() {
+        let sample_rate = 16_000;
+
+        let mut clean = clone_reference_fixture(sample_rate, 0.0015, false);
+        let clean_speech_before =
+            rms(&clean[sample_rate as usize / 5..sample_rate as usize * 2 / 5]);
+        let clean_report = polish_clone_reference_audio(&mut clean, sample_rate);
+        let clean_speech_after =
+            rms(&clean[sample_rate as usize / 5..sample_rate as usize * 2 / 5]);
+        assert!(clean_report.background_gate_threshold > 0.0);
+        assert!(clean_speech_after > clean_speech_before * 0.80);
+        assert!(peak(&clean) <= PCM_HEADROOM + 1e-6);
+
+        let mut noisy = clone_reference_fixture(sample_rate, 0.014, true);
+        let noisy_quiet_before = quiet_rms(&noisy, sample_rate);
+        let noisy_speech_before =
+            rms(&noisy[sample_rate as usize / 5..sample_rate as usize * 2 / 5]);
+        let noisy_report = polish_clone_reference_audio(&mut noisy, sample_rate);
+        let noisy_speech_after =
+            rms(&noisy[sample_rate as usize / 5..sample_rate as usize * 2 / 5]);
+        assert!(noisy_report.quiet_rms_before >= noisy_quiet_before * 0.95);
+        assert!(noisy_report.quiet_rms_after < noisy_report.quiet_rms_before * 0.80);
+        assert!(noisy_speech_after > noisy_speech_before * 0.65);
+
+        let mut long = vec![0.0; sample_rate as usize * 35];
+        let trim = trim_clone_reference_audio(&mut long, sample_rate).unwrap();
+        assert_eq!(trim.original_samples, sample_rate as usize * 35);
+        assert_eq!(trim.trimmed_samples, sample_rate as usize * 30);
+        assert_eq!(long.len(), trim.trimmed_samples);
+        assert_eq!(trim.sample_rate, sample_rate);
+        assert!((trim.original_duration_sec - 35.0).abs() < 1e-6);
+        assert_eq!(trim.max_duration_sec, MAX_CLONE_REFERENCE_SECS);
+    }
+
+    #[test]
     fn harsh_midband_smoother_softens_noisy_fricative_frames() {
         let sample_rate = 48_000;
         let len = sample_rate as usize / 10;
@@ -641,5 +709,23 @@ mod tests {
                 (2.0 * std::f32::consts::PI * hz * t).sin()
             })
             .collect()
+    }
+
+    fn clone_reference_fixture(sample_rate: u32, noise_floor: f32, add_hiss: bool) -> Vec<f32> {
+        let quiet_len = sample_rate as usize / 5;
+        let speech_len = sample_rate as usize / 5;
+        let mut samples = vec![noise_floor; quiet_len];
+        samples.extend((0..speech_len).map(|i| {
+            let t = i as f32 / sample_rate as f32;
+            let speech = (2.0 * std::f32::consts::PI * 1_000.0 * t).sin() * 0.08;
+            let hiss = if add_hiss && i % 2 == 0 {
+                noise_floor * 0.6
+            } else {
+                0.0
+            };
+            speech + noise_floor + hiss
+        }));
+        samples.extend(vec![noise_floor; quiet_len]);
+        samples
     }
 }

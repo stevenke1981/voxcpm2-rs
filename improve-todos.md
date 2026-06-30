@@ -53,11 +53,13 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
   - 狀態：已在 `harness/audio_quality_gate.ps1` 新增 20ms frame-level high-ZCR/harsh-frame
     sidecar JSON；仍需用真實模型 sample 與 ASR transcript 建立 accepted baseline。
 
-- [ ] **clone reference 前處理回歸**
+- [x] **clone reference 前處理回歸**
   - 目前 clone reference 已在 AudioVAE encoder 前做 `polish_clone_reference_audio`。
   - 補 clone reference fixture：乾淨 reference、帶背景噪 reference、過長 reference。
   - 驗收：帶背景噪 reference 的 quiet_rms 降低，reference 不因 gate 被削到不可辨識；
     超過 30 秒 reference 有明確 trim log。
+  - 狀態：已新增 clean/noisy/long synthetic fixture matrix；`SynthMetricsReport` 會輸出
+    `clone_reference_trim`，真實模型 gate 仍需補 ASR transcript baseline。
 
 ## P1 - Voice clone parity 與模式完整性
 

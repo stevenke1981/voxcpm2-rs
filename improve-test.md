@@ -106,6 +106,18 @@ CLI language-risk smoke：
 - background-noisy reference。
 - long reference (>30s)。
 
+快速單元 fixture gate：
+
+```powershell
+.\run_with_vs.cmd cargo test -p voxcpm2-core clone_reference_fixture_matrix --features cpu
+```
+
+通過條件：
+
+- clean reference 經 `polish_clone_reference_audio` 後 speech RMS 保留至少 80%。
+- noisy reference 的 `quiet_rms_after` 明顯低於 `quiet_rms_before`，speech RMS 保留至少 65%。
+- long reference 會被裁切到 30 秒，並回傳 `clone_reference_trim` 診斷欄位。
+
 可直接使用 harness 跑 clone gate：
 
 ```powershell
@@ -132,6 +144,7 @@ CLI language-risk smoke：
 通過條件：
 
 - clone reference polish report 顯示 quiet_rms_after < quiet_rms_before。
+- clone metrics 若 reference 超過 30 秒，`clone_reference_trim` 顯示原始長度、裁切長度與 sample rate。
 - 背景 gate threshold 在合理範圍內，不把 reference 語音削成靜音。
 - long reference 顯示 trim log，且不造成 CUDA OOM。
 - ASR 可辨識目標文字。
