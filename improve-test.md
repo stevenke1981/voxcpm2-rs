@@ -192,6 +192,35 @@ CLI language-risk smoke：
 - CUDA synth/clone 不比前一 accepted baseline 明顯退化。
 - 失敗時保留 stderr、metrics、輸出路徑或缺檔診斷。
 
+可用 baseline writer 產生 release evidence：
+
+```powershell
+.\harness\write_acceptance_baseline.ps1 `
+  -ModelDir models\VoxCPM2 `
+  -Device cuda `
+  -RefAudio fixtures\clone\noisy_ref.wav `
+  -OutDir output\accepted-baseline `
+  -RunAsr `
+  -UpdateAcceptanceReport
+```
+
+快速驗證 baseline writer 本身：
+
+```powershell
+.\harness\write_acceptance_baseline.ps1 `
+  -Device cpu `
+  -DryRun `
+  -SkipClone `
+  -OutDir output\accepted-baseline-dryrun
+```
+
+通過條件：
+
+- `baseline_manifest.json` 包含 commit、command、device、seed、每個 case 的 WAV/metrics/quality path。
+- `baseline_report.md` 可讀取每個 case 的 peak、high-ZCR frame 數與 ASR 狀態。
+- 真實模型 accepted baseline 必須使用 `-RunAsr`；若未跑 ASR，狀態只能是 `needs_asr`。
+- dry-run 只能證明 harness 可執行，不能標成真實語音 accepted baseline。
+
 ## G6 - GUI smoke
 
 手動或 Playwright/Windows UI harness：

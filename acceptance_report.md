@@ -159,4 +159,20 @@ cargo build --features cuda
 | **CFM seed propagation** | `torch.randn(seed=s)` | `StdRng` + Box-Muller with `seed: Option<u64>` | **2026-06-28** |
 | **🔴 CFM CFG uncond cond bug** | `cond_in[:b], cond_in[b:] = cond, cond` | `cond_2x = cat(&[cond, cond])` (🐛 原是用 zeros) | **2026-06-28** |
 
+<!-- ACCEPTANCE_BASELINE_START -->
+### Latest Accepted Baseline Artifact
 
+**Status:** harness ready; real-model ASR baseline not yet recorded.
+
+- Writer: `harness\write_acceptance_baseline.ps1`
+- Dry-run verification command:
+  ```powershell
+  .\harness\write_acceptance_baseline.ps1 -Device cpu -DryRun -SkipClone -OutDir output\accepted-baseline-dryrun
+  ```
+- Real acceptance command:
+  ```powershell
+  .\harness\write_acceptance_baseline.ps1 -ModelDir models\VoxCPM2 -Device cuda -RefAudio fixtures\clone\noisy_ref.wav -OutDir output\accepted-baseline -RunAsr -UpdateAcceptanceReport
+  ```
+- Required evidence: `baseline_manifest.json`, `baseline_report.md`, WAV metrics, quality sidecars, ASR transcript, commit hash.
+
+<!-- ACCEPTANCE_BASELINE_END -->

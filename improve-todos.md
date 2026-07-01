@@ -100,3 +100,6 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
 - [ ] **建立最新 acceptance report**
   - 以真實模型 smoke + ASR + metrics 為證據，不只寫「可產生 WAV」。
   - 驗收：每個通過項包含日期、commit、命令、輸出路徑、ASR 結果與殘留風險。
+  - 狀態：已新增 `harness/write_acceptance_baseline.ps1`，可包住 quality gate 並輸出
+    `baseline_manifest.json` / `baseline_report.md`，也支援 `-RunAsr` 與 `-UpdateAcceptanceReport`；
+    下一步仍需用真實模型 + CUDA + ASR 產生 accepted baseline。

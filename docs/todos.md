@@ -76,6 +76,7 @@
 - [x] 音質 gate sidecar：`harness/audio_quality_gate.ps1` 會輸出 20ms frame-level `*.metrics.quality.json`，記錄 high-ZCR/harsh-frame proxy、max ZCR 與 frame RMS，協助定位中段刺耳雜音。
 - [x] Mandarin 輸入語言 gate：繁體中文或 voice design 含繁體提示時，CLI/GUI 共用 pipeline 會提示可能偏向廣東話；簡體中文 Mandarin 基準不誤觸。
 - [x] Clone reference fixture gate：clean/noisy/long synthetic reference 單元測試覆蓋 reference polish、speech preservation 與 30 秒 trim 診斷；clone metrics 會輸出 `clone_reference_trim`。
+- [x] Accepted baseline writer：新增 `harness/write_acceptance_baseline.ps1`，可重跑 quality gate、彙整 commit/WAV/metrics/quality sidecar，並可選擇執行 ASR required-term 檢查產生 release evidence。
 
 ## Milestone I：egui
 
@@ -97,3 +98,4 @@
 - [ ] Golden report。
 - [x] CLI voice clone consent gate：`clone` 必須帶 `--i-have-consent`，未授權請求會在載入模型或寫 WAV 前失敗。
 - [ ] Safety notice。
+- [ ] 真實模型 accepted baseline：用 CUDA + ASR 跑 `harness/write_acceptance_baseline.ps1 -RunAsr`，將 `baseline_report.md` / `baseline_manifest.json` 寫回 `acceptance_report.md`。

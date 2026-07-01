@@ -35,6 +35,9 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
   簡體中文 Mandarin 基準不誤觸。
 - Clone reference 已有 clean/noisy/long synthetic fixture gate，並在 clone metrics 中輸出
   `clone_reference_trim` 以記錄長 reference 裁切診斷。
+- Accepted baseline writer 已新增：`harness/write_acceptance_baseline.ps1` 可產生
+  `baseline_manifest.json` 與 `baseline_report.md`，並可透過 `-RunAsr` 將 ASR transcript 與
+  required-term 檢查納入 release evidence。
 
 ## 最終完成定義
 
@@ -65,6 +68,7 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 
 ## 下一個 commit 建議
 
-下一個實作 commit 建議只做一件事：建立真實模型 accepted baseline artifact，將 seed 99 Mandarin
-synth/clone 的 metrics、quality sidecar、ASR transcript 與 commit hash 寫入 acceptance report。這能把目前
-已完成的 safety/quality gate 從 smoke 測試推進到發布驗收證據。
+下一個實作 commit 建議只做一件事：用 `harness/write_acceptance_baseline.ps1 -Device cuda -RunAsr`
+跑真實模型 seed 99 Mandarin synth/clone，確認 ASR required-term 通過後更新
+`acceptance_report.md` 的 latest baseline artifact。這能把目前已完成的 harness 從 dry-run 驗證推進到
+發布驗收證據。
