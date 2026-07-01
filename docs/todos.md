@@ -98,4 +98,4 @@
 - [ ] Golden report。
 - [x] CLI voice clone consent gate：`clone` 必須帶 `--i-have-consent`，未授權請求會在載入模型或寫 WAV 前失敗。
 - [ ] Safety notice。
-- [ ] 真實模型 accepted baseline：用 CUDA + ASR 跑 `harness/write_acceptance_baseline.ps1 -RunAsr`，將 `baseline_report.md` / `baseline_manifest.json` 寫回 `acceptance_report.md`。
+- [x] 真實模型 accepted baseline：已用 CUDA + ASR 跑 `harness/write_acceptance_baseline.ps1 -RunAsr -Seed 102`，並將 `baseline_report.md` / `baseline_manifest.json` 寫回 `acceptance_report.md`。

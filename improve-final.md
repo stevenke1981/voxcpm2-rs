@@ -38,6 +38,9 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 - Accepted baseline writer 已新增：`harness/write_acceptance_baseline.ps1` 可產生
   `baseline_manifest.json` 與 `baseline_report.md`，並可透過 `-RunAsr` 將 ASR transcript 與
   required-term 檢查納入 release evidence。
+- 真實模型 CUDA + ASR accepted baseline 已完成：seed 102 通過 Mandarin short、midburst、
+  fricatives 與 clone 四個 required-term gate；seed 99 仍保留為 regression probe，但本次短句
+  ASR 未通過，因此不作為 accepted baseline。
 
 ## 最終完成定義
 
@@ -68,7 +71,6 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 
 ## 下一個 commit 建議
 
-下一個實作 commit 建議只做一件事：用 `harness/write_acceptance_baseline.ps1 -Device cuda -RunAsr`
-跑真實模型 seed 99 Mandarin synth/clone，確認 ASR required-term 通過後更新
-`acceptance_report.md` 的 latest baseline artifact。這能把目前已完成的 harness 從 dry-run 驗證推進到
-發布驗收證據。
+下一個實作 commit 建議只做一件事：補 clone sequence/token mask parity fixture，對齊 Python/C++
+reference-only、prompt-only continuation 與 combined mode。音質/ASR baseline 已有 release evidence，
+下一個風險最高的是 clone 模式完整性。

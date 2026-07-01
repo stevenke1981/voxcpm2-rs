@@ -136,7 +136,7 @@ function New-ReportMarkdown($Manifest) {
   } else {
     $lines.Add("- ASR required-term checks were run for every generated case.")
   }
-  $lines.Add("- `baseline_manifest.json` is the machine-readable source of truth for this report.")
+  $lines.Add("- baseline_manifest.json is the machine-readable source of truth for this report.")
   return ($lines -join "`r`n") + "`r`n"
 }
 
@@ -144,15 +144,17 @@ function Update-AcceptanceReportFile([string]$BaselineReportPath, [string]$Manif
   $reportPath = Join-Path $root "acceptance_report.md"
   $start = "<!-- ACCEPTANCE_BASELINE_START -->"
   $end = "<!-- ACCEPTANCE_BASELINE_END -->"
+  $relativeBaselineReportPath = ConvertTo-RelativePath -Path $BaselineReportPath
+  $relativeManifestPath = ConvertTo-RelativePath -Path $ManifestPath
   $block = @"
 $start
 ### Latest Accepted Baseline Artifact
 
 **Status:** $Status
 
-- Baseline report: `$(ConvertTo-RelativePath -Path $BaselineReportPath)`
-- Baseline manifest: `$(ConvertTo-RelativePath -Path $ManifestPath)`
-- Rebuild command: `harness\write_acceptance_baseline.ps1`
+- Baseline report: $relativeBaselineReportPath
+- Baseline manifest: $relativeManifestPath
+- Rebuild command: harness\write_acceptance_baseline.ps1
 
 $end
 "@
@@ -163,7 +165,7 @@ $end
   }
 
   $pattern = [regex]::Escape($start) + ".*?" + [regex]::Escape($end)
-  if ($existing -match $pattern) {
+  if ([regex]::IsMatch($existing, $pattern, [Text.RegularExpressions.RegexOptions]::Singleline)) {
     $updated = [regex]::Replace($existing, $pattern, $block, [Text.RegularExpressions.RegexOptions]::Singleline)
   } else {
     $updated = $existing.TrimEnd() + "`r`n`r`n" + $block + "`r`n"

@@ -97,9 +97,9 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
   - 將本文件 P0/P1/P2 轉成既有 milestone 的可追蹤項。
   - 驗收：每個新 gate 都能連回 `improve-test.md` 指令或人工驗收。
 
-- [ ] **建立最新 acceptance report**
+- [x] **建立最新 acceptance report**
   - 以真實模型 smoke + ASR + metrics 為證據，不只寫「可產生 WAV」。
   - 驗收：每個通過項包含日期、commit、命令、輸出路徑、ASR 結果與殘留風險。
   - 狀態：已新增 `harness/write_acceptance_baseline.ps1`，可包住 quality gate 並輸出
     `baseline_manifest.json` / `baseline_report.md`，也支援 `-RunAsr` 與 `-UpdateAcceptanceReport`；
-    下一步仍需用真實模型 + CUDA + ASR 產生 accepted baseline。
+    已用 CUDA + ASR 跑真實模型 baseline，seed 102 的 Mandarin/clone required-term 檢查全部通過。

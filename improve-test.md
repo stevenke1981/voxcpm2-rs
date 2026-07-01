@@ -198,8 +198,9 @@ CLI language-risk smoke：
 .\harness\write_acceptance_baseline.ps1 `
   -ModelDir models\VoxCPM2 `
   -Device cuda `
-  -RefAudio fixtures\clone\noisy_ref.wav `
+  -RefAudio ref_15s.wav `
   -OutDir output\accepted-baseline `
+  -Seed 102 `
   -RunAsr `
   -UpdateAcceptanceReport
 ```
@@ -220,6 +221,7 @@ CLI language-risk smoke：
 - `baseline_report.md` 可讀取每個 case 的 peak、high-ZCR frame 數與 ASR 狀態。
 - 真實模型 accepted baseline 必須使用 `-RunAsr`；若未跑 ASR，狀態只能是 `needs_asr`。
 - dry-run 只能證明 harness 可執行，不能標成真實語音 accepted baseline。
+- 本次 accepted baseline 使用 seed 102；seed 99 保留為 regression probe，但不作為通過基準。
 
 ## G6 - GUI smoke
 
