@@ -329,7 +329,7 @@ impl VoxPipeline {
         if !req.dry_run {
             let polish = audio::polish_generated_speech(&mut samples, sample_rate);
             eprintln!(
-                "  [audio] polish: dc={:.6} peak_before={:.6} peak_after={:.6} headroom_gain={:.6} quiet_rms={:.6}->{:.6} bg_gate={:.6} harsh_frames={}",
+                "  [audio] polish: dc={:.6} peak_before={:.6} peak_after={:.6} headroom_gain={:.6} quiet_rms={:.6}->{:.6} bg_gate={:.6} harsh_frames={} patch_boundaries={} highband_frames={}",
                 polish.dc_offset,
                 polish.peak_before,
                 polish.peak_after,
@@ -337,7 +337,9 @@ impl VoxPipeline {
                 polish.quiet_rms_before,
                 polish.quiet_rms_after,
                 polish.background_gate_threshold,
-                polish.harsh_frames_smoothed
+                polish.harsh_frames_smoothed,
+                polish.patch_boundaries_smoothed,
+                polish.highband_frames_leveled
             );
             polish_report = Some(polish);
         }

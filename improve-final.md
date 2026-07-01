@@ -58,6 +58,21 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
   `output/alignment_prompt_only_seed102.wav`、`output/alignment_combined_seed102_v2.wav`。
   短句 synth 經 faster-whisper large-v3-turbo CUDA ASR 通過主要文字：
   「这是普通话测试 / 声音清楚自然」。
+- 針對使用者回報的「像廣播調頻切換」雜音，已定位為約 160ms AudioVAE/CFM patch boundary
+  的局部高頻殘差與 sample-step 跳變；`audio.rs` 新增 patch-boundary de-switch smoother，只在
+  邊界前後高頻/RMS/ZCR/step 異常時啟動並壓低高頻殘差。
+  真實 CUDA 新樣本 `output/alignment_synth_short_seed102_patchsmooth.wav` 顯示
+  `patch_boundaries_smoothed=9`；同 seed/text 舊新比較中最大 boundary step 由 0.0631 降至 0.0343，
+  最嚴重高頻比例由 7.22 降至 5.62。ASR transcript 仍通過：
+  「这是普通话测试 / 声音清楚自然」。
+- 第二輪針對同一檔仍可聽到的「背景切換」感，我用 20ms 分析窗量測到部分 high-band residual
+  仍會突增；這是我的診斷定位。因此新增 high-band residual leveler，
+  只限制 4kHz 以上殘差，低頻/中頻語音主體保留。
+  真實 CUDA 新樣本 `output/alignment_synth_short_seed102_highband.wav` 顯示
+  `highband_frames_leveled=54`；相較 `alignment_synth_short_seed102_patchsmooth.wav`，top 20ms
+  high-band post RMS 最大值由 0.03085 降至 0.01131，平均由 0.00735 降至 0.00377。
+  faster-whisper large-v3-turbo CUDA ASR 仍通過：
+  「这是普通话测试 / 声音清楚自然」。
 
 ## 最終完成定義
 

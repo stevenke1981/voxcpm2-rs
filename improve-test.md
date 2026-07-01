@@ -98,6 +98,52 @@ CLI language-risk smoke：
 - high-ZCR / 4-8kHz burst proxy frame 數不高於前一個 accepted baseline。
 - ASR transcript 與原文高度一致；至少不得漏掉主要詞：「普通话」、「语音质量」、「刺耳杂音」。
 
+Patch-boundary de-switch regression：
+
+```powershell
+.\run_with_vs.cmd cargo test -p voxcpm2-core `
+  patch_boundary_smoother_softens_fm_like_switches --features cpu
+.\run_with_vs.cmd cargo run -p voxcpm2-cli --no-default-features --features cuda -- synth `
+  --model-dir models\VoxCPM2 `
+  --text "这是普通话测试。声音清楚自然。" `
+  --out output\alignment_synth_short_seed102_patchsmooth.wav `
+  --metrics-out output\alignment_synth_short_seed102_patchsmooth.metrics.json `
+  --steps 30 --seed 102 --cfg 2.5 --device cuda
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.codex\skills\asr-transcribe\scripts\run-asr.ps1" `
+  -InputMedia "E:\voxcpm2_rust_candle_pack\output\alignment_synth_short_seed102_patchsmooth.wav" `
+  -OutputDir "E:\voxcpm2_rust_candle_pack\output\asr_patchsmooth_short_seed102" `
+  -Engine faster-whisper -Model large-v3-turbo -ChunkSeconds 600
+```
+
+通過條件：
+
+- `polish.patch_boundaries_smoothed` > 0，表示 160ms patch boundary de-switch 有實際觸發。
+- 同 seed/text 舊新比較時，boundary sample-step 類切換尖峰下降，且高頻殘差跳變不增加。
+- ASR transcript 仍包含「这是普通话测试」與「声音清楚自然」。
+
+High-band background switching regression：
+
+```powershell
+.\run_with_vs.cmd cargo test -p voxcpm2-core `
+  highband_leveler_reduces_switching_background_without_muting_voice --features cpu
+.\run_with_vs.cmd cargo run -p voxcpm2-cli --no-default-features --features cuda -- synth `
+  --model-dir models\VoxCPM2 `
+  --text "这是普通话测试。声音清楚自然。" `
+  --out output\alignment_synth_short_seed102_highband.wav `
+  --metrics-out output\alignment_synth_short_seed102_highband.metrics.json `
+  --steps 30 --seed 102 --cfg 2.5 --device cuda
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.codex\skills\asr-transcribe\scripts\run-asr.ps1" `
+  -InputMedia "E:\voxcpm2_rust_candle_pack\output\alignment_synth_short_seed102_highband.wav" `
+  -OutputDir "E:\voxcpm2_rust_candle_pack\output\asr_highband_short_seed102" `
+  -Engine faster-whisper -Model large-v3-turbo -ChunkSeconds 600
+```
+
+通過條件：
+
+- `polish.highband_frames_leveled` > 0，表示 high-band residual leveler 有實際觸發。
+- top 20ms high-band residual 的最大/平均值低於 patch-boundary-only baseline。
+- ASR transcript 仍包含「这是普通话测试」與「声音清楚自然」。
+
 ## G3 - Clone reference noise gate
 
 測試組：

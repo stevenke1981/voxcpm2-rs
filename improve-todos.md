@@ -69,6 +69,25 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
     uniform scheduler 目前在 Mandarin short/midburst 兩句最佳。下一步是把該候選放進完整矩陣，補
     clone 與 fricatives 後再決定是否更新 accepted baseline。
 
+- [x] **降低 160ms patch boundary 調頻切換雜音**
+  - 症狀：同 seed 102 短句在 160ms AudioVAE/CFM patch 邊界出現高頻殘差與 sample-step 跳變，
+    聽感像廣播調頻切換。
+  - 修正：`polish_generated_speech` 新增 patch-boundary de-switch smoother；只在邊界前後
+    高頻/RMS/ZCR/sample-step 異常時啟動，並只壓低高頻殘差，不全域低通。
+  - 驗收：新增 `patch_boundary_smoother_softens_fm_like_switches` 單元測試；真實 CUDA 短句
+    `output/alignment_synth_short_seed102_patchsmooth.wav` 的最大 boundary step 從 0.0631 降到 0.0343，
+    ASR transcript 仍為「这是普通话测试 / 声音清楚自然」。
+
+- [x] **降低量測定位的高頻背景切換雜音**
+  - 症狀：我用 20ms 分析窗量測 `alignment_synth_short_seed102_patchsmooth.wav`，發現部分區段
+    high-band residual 突增，聽感像背景在切換；這是我的診斷結果。
+  - 修正：`polish_generated_speech` 新增 high-band residual leveler，將 4kHz 以上殘差逐 frame
+    限制到語音 RMS 相對安全範圍，並使用 fast attack / slow release 避免背景瞬間打開。
+  - 驗收：新增 `highband_leveler_reduces_switching_background_without_muting_voice` 單元測試；
+    真實 CUDA 新樣本 `output/alignment_synth_short_seed102_highband.wav` 的 top 20ms high-band
+    post RMS 最大值從 0.03085 降到 0.01131，ASR transcript 仍為
+    「这是普通话测试 / 声音清楚自然」。
+
 ## P1 - Voice clone parity 與模式完整性
 
 - [ ] **補齊 clone 模式矩陣**

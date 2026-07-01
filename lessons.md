@@ -123,3 +123,15 @@ VS 2022 Community 安裝於非預設路徑（`C:\Program Files\Microsoft Visual 
 **Trigger:** Combined reference+prompt clone generated much longer audio than target text warranted.
 **Rule:** In clone/continuation modes, AR length caps must use target text token length, not combined sequence length. Reference/prompt audio patches are context, not target text. Audio patch placeholder token IDs should stay `0` to match OpenBMB and voxcpm-cpp sequence fixtures.
 **Source:** OpenBMB/VoxCPM `max_len=min(target_text_length*6+10,max_len)` and voxcpm-cpp `vcpm_seq_build_clone`
+
+---
+## Lesson #13 — 2026-07-01
+**Trigger:** Generated samples sounded like FM radio tuning or station switching even after background gate and harsh-frame smoothing.
+**Rule:** If the artifact is a short switching/tuning sound, inspect boundaries at `patch_size * AudioVAE hop` first: VoxCPM2 uses 4 latent frames per generated patch, which is about 160ms at 48kHz output. A local patch-boundary de-switch smoother that detects high-frequency/RMS/ZCR/sample-step jumps is safer than another global low-pass, because it can reduce boundary high-frequency residual while preserving ASR intelligibility.
+**Source:** `alignment_synth_short_seed102.wav` vs `alignment_synth_short_seed102_patchsmooth.wav`; faster-whisper CUDA ASR preserved「这是普通话测试 / 声音清楚自然」after smoothing.
+
+---
+## Lesson #14 — 2026-07-01
+**Trigger:** The patch-boundary-smoothed sample still sounded like the background was switching.
+**Rule:** After patch-boundary clicks are reduced, inspect high-band residual changes with a short analysis window such as 20ms. That analysis window is a diagnostic choice from the analysis. If the high band opens abruptly while ASR remains correct, use a split-band residual leveler with fast attack instead of tightening the full-band background gate. This stabilizes the background above 4kHz without muting the low/mid speech body.
+**Source:** `alignment_synth_short_seed102_patchsmooth.wav` vs `alignment_synth_short_seed102_highband.wav`; top 20ms post high-band RMS max improved `0.03085 -> 0.01131`, ASR still preserved「这是普通话测试 / 声音清楚自然」.

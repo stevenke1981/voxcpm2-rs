@@ -80,6 +80,8 @@
 - [x] Quality sweep harness：新增 `harness/quality_sweep.ps1`，可掃 seed/cfg/latent_norm/scheduler，並以 ASR similarity、required terms、high-ZCR、quiet RMS、clone reference floor 與 peak penalty 排序；targeted CUDA+ASR probe 目前以 `seed102_cfg2p5_lndefault_uniform` 為最佳 full-matrix 候選。
 - [x] 對齊 OpenBMB/VoxCPM 與 voxcpm-cpp clone 生成序列：CLI/pipeline 支援 reference-only、prompt-only continuation、reference+prompt combined；reference audio right padding、prompt audio left padding，且 prompt 最後 latent patch 會作為 CFM 初始 condition。
 - [x] 對齊官方/C++ audio patch placeholder 與生成長度：clone audio patch token id 改為 `0`；AR `max_len` 改用 target text token 長度，避免 reference/prompt patches 放大生成長度。
+- [x] 降低 AudioVAE patch 邊界「調頻切換」雜音：generated speech polish 新增 160ms patch-boundary de-switch smoother，偵測高頻/RMS/ZCR/step 突變後只在邊界附近壓低高頻殘差；metrics 會輸出 `patch_boundaries_smoothed`。
+- [x] 降低 20ms 背景切換雜音：generated speech polish 新增 high-band residual leveler，逐 frame 穩定 4kHz 以上背景殘差；metrics 會輸出 `highband_frames_leveled`，CUDA 短句 ASR 仍通過。
 - [ ] 真實模型 prompt/combined clone gate：以 CUDA + ASR 驗證 `--prompt-audio --prompt-text` 與 reference+prompt combined 不退化，並補 GUI prompt/combined 控制。
 
 ## Milestone I：egui

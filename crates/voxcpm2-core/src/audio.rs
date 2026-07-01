@@ -17,6 +17,16 @@ const HARSH_SMOOTHER_LOWPASS_HZ: f32 = 4_500.0;
 const HARSH_ZCR_THRESHOLD: f32 = 0.11;
 const HARSH_RMS_THRESHOLD: f32 = 0.005;
 const HARSH_MAX_BLEND: f32 = 0.70;
+const PATCH_BOUNDARY_SMOOTHER_PATCH_MS: f32 = 160.0;
+const PATCH_BOUNDARY_SMOOTHER_WINDOW_MS: f32 = 20.0;
+const PATCH_BOUNDARY_SMOOTHER_LOWPASS_HZ: f32 = 4_000.0;
+const PATCH_BOUNDARY_MAX_BLEND: f32 = 0.85;
+const HIGHBAND_LEVELER_FRAME_MS: f32 = 20.0;
+const HIGHBAND_LEVELER_SPLIT_HZ: f32 = 4_000.0;
+const HIGHBAND_LEVELER_MAX_RMS: f32 = 0.0075;
+const HIGHBAND_LEVELER_RATIO: f32 = 0.12;
+const HIGHBAND_LEVELER_FLOOR: f32 = 0.0012;
+const HIGHBAND_LEVELER_MIN_GAIN: f32 = 0.20;
 
 const FADE_IN_MS: f32 = 5.0;
 const FADE_OUT_MS: f32 = 12.0;
@@ -33,6 +43,8 @@ pub struct AudioPolishReport {
     pub quiet_rms_after: f32,
     pub background_gate_threshold: f32,
     pub harsh_frames_smoothed: usize,
+    pub patch_boundaries_smoothed: usize,
+    pub highband_frames_leveled: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -148,6 +160,8 @@ pub fn polish_generated_speech(samples: &mut [f32], sample_rate: u32) -> AudioPo
         0.020,
     );
     let harsh_frames_smoothed = apply_harsh_midband_smoother(samples, sample_rate);
+    let patch_boundaries_smoothed = apply_patch_boundary_smoother(samples, sample_rate);
+    let highband_frames_leveled = apply_highband_residual_leveler(samples, sample_rate);
     apply_edge_fades(samples, sample_rate, FADE_IN_MS, FADE_OUT_MS);
 
     let peak_after_filter = peak(samples);
@@ -171,6 +185,8 @@ pub fn polish_generated_speech(samples: &mut [f32], sample_rate: u32) -> AudioPo
         quiet_rms_after: quiet_rms(samples, sample_rate),
         background_gate_threshold,
         harsh_frames_smoothed,
+        patch_boundaries_smoothed,
+        highband_frames_leveled,
     }
 }
 
@@ -224,6 +240,8 @@ pub fn polish_clone_reference_audio(samples: &mut [f32], sample_rate: u32) -> Au
         quiet_rms_after: quiet_rms(samples, sample_rate),
         background_gate_threshold,
         harsh_frames_smoothed,
+        patch_boundaries_smoothed: 0,
+        highband_frames_leveled: 0,
     }
 }
 
@@ -437,6 +455,157 @@ fn apply_harsh_midband_smoother(samples: &mut [f32], sample_rate: u32) -> usize 
     }
 
     smoothed_frames
+}
+
+fn apply_patch_boundary_smoother(samples: &mut [f32], sample_rate: u32) -> usize {
+    if samples.is_empty() || sample_rate == 0 {
+        return 0;
+    }
+
+    let patch_len = ((sample_rate as f32 * PATCH_BOUNDARY_SMOOTHER_PATCH_MS) / 1000.0)
+        .round()
+        .max(1.0) as usize;
+    let window = ((sample_rate as f32 * PATCH_BOUNDARY_SMOOTHER_WINDOW_MS) / 1000.0)
+        .round()
+        .max(1.0) as usize;
+    if samples.len() < patch_len + window * 2 {
+        return 0;
+    }
+
+    let mut softened = samples.to_vec();
+    apply_one_pole_lowpass_zero_phase(
+        &mut softened,
+        sample_rate,
+        PATCH_BOUNDARY_SMOOTHER_LOWPASS_HZ,
+    );
+
+    let mut high_band = samples.to_vec();
+    apply_one_pole_highpass_zero_phase(
+        &mut high_band,
+        sample_rate,
+        PATCH_BOUNDARY_SMOOTHER_LOWPASS_HZ,
+    );
+
+    let mut smoothed = 0usize;
+    let mut boundary = patch_len;
+    while boundary + window < samples.len() {
+        if boundary < window {
+            boundary += patch_len;
+            continue;
+        }
+
+        let left = boundary - window;
+        let right = boundary + window;
+        let before = &samples[left..boundary];
+        let after = &samples[boundary..right];
+        let rms_before = rms(before).max(1e-7);
+        let rms_after = rms(after).max(1e-7);
+        let rms_ratio = rms_after / rms_before;
+        let high_before = rms(&high_band[left..boundary]).max(1e-7);
+        let high_after = rms(&high_band[boundary..right]).max(1e-7);
+        let high_ratio = high_after / high_before;
+        let zcr_delta = (zero_crossing_rate(after) - zero_crossing_rate(before)).abs();
+        let sample_step = (samples[boundary] - samples[boundary - 1]).abs();
+
+        let should_smooth = !(0.50..=2.00).contains(&high_ratio)
+            || !(0.45..=2.25).contains(&rms_ratio)
+            || zcr_delta > 0.055
+            || sample_step > 0.020;
+
+        if should_smooth {
+            smoothed += 1;
+            let before_high_gain = if high_before > high_after * 1.60 {
+                ((high_after * 1.40) / high_before).clamp(0.12, 0.70)
+            } else {
+                1.0
+            };
+            let after_high_gain = if high_after > high_before * 1.60 {
+                ((high_before * 1.40) / high_after).clamp(0.12, 0.70)
+            } else {
+                1.0
+            };
+            for idx in left..right {
+                let (distance, side_gain) = if idx < boundary {
+                    ((boundary - idx) as f32 / window as f32, before_high_gain)
+                } else {
+                    ((idx - boundary) as f32 / window as f32, after_high_gain)
+                };
+                let distance = distance.clamp(0.0, 1.0);
+                let envelope = 1.0 - distance;
+                let base_high_gain = 1.0 - PATCH_BOUNDARY_MAX_BLEND * envelope * envelope;
+                let leveled_high_gain = side_gain + (1.0 - side_gain) * distance.powi(4);
+                let high_gain = base_high_gain.min(leveled_high_gain);
+                samples[idx] = softened[idx] + (samples[idx] - softened[idx]) * high_gain;
+            }
+        }
+
+        boundary += patch_len;
+    }
+
+    smoothed
+}
+
+fn apply_highband_residual_leveler(samples: &mut [f32], sample_rate: u32) -> usize {
+    if samples.is_empty() || sample_rate == 0 {
+        return 0;
+    }
+
+    let frame_len = ((sample_rate as f32 * HIGHBAND_LEVELER_FRAME_MS) / 1000.0)
+        .round()
+        .max(1.0) as usize;
+    if samples.len() < frame_len {
+        return 0;
+    }
+
+    let mut low = samples.to_vec();
+    apply_one_pole_lowpass_zero_phase(&mut low, sample_rate, HIGHBAND_LEVELER_SPLIT_HZ);
+    let high: Vec<f32> = samples
+        .iter()
+        .zip(&low)
+        .map(|(sample, low)| sample - low)
+        .collect();
+
+    let frame_count = samples.len().div_ceil(frame_len);
+    let mut target_gains = Vec::with_capacity(frame_count);
+    let mut leveled_frames = 0usize;
+
+    for frame_idx in 0..frame_count {
+        let start = frame_idx * frame_len;
+        let end = (start + frame_len).min(samples.len());
+        let full_rms = rms(&samples[start..end]);
+        let high_rms = rms(&high[start..end]);
+        let target_high = (full_rms * HIGHBAND_LEVELER_RATIO + HIGHBAND_LEVELER_FLOOR)
+            .min(HIGHBAND_LEVELER_MAX_RMS)
+            .max(HIGHBAND_LEVELER_FLOOR);
+
+        let gain = if high_rms > target_high {
+            leveled_frames += 1;
+            (target_high / high_rms).clamp(HIGHBAND_LEVELER_MIN_GAIN, 1.0)
+        } else {
+            1.0
+        };
+        target_gains.push(gain);
+    }
+
+    let mut previous_gain = 1.0f32;
+    for (frame_idx, &target_gain) in target_gains.iter().enumerate() {
+        let start = frame_idx * frame_len;
+        let end = (start + frame_len).min(samples.len());
+        let span = (end - start).max(1) as f32;
+        for i in 0..(end - start) {
+            let t = i as f32 / span;
+            let gain = if target_gain < previous_gain {
+                target_gain + (previous_gain - target_gain) * (1.0 - t).powi(4)
+            } else {
+                previous_gain + (target_gain - previous_gain) * t
+            };
+            let idx = start + i;
+            samples[idx] = low[idx] + high[idx] * gain;
+        }
+        previous_gain = target_gain;
+    }
+
+    leveled_frames
 }
 
 fn zero_crossing_rate(samples: &[f32]) -> f32 {
@@ -700,6 +869,118 @@ mod tests {
 
         assert!(frames > 0);
         assert!(diff_after < diff_before * 0.75);
+    }
+
+    #[test]
+    fn patch_boundary_smoother_softens_fm_like_switches() {
+        let sample_rate = 48_000;
+        let patch_len =
+            ((sample_rate as f32 * PATCH_BOUNDARY_SMOOTHER_PATCH_MS) / 1000.0).round() as usize;
+        let len = patch_len * 3;
+        let mut samples: Vec<f32> = (0..len)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                let voice = (2.0 * std::f32::consts::PI * 800.0 * t).sin() * 0.035;
+                let tuning_noise = if i >= patch_len && i < patch_len * 2 {
+                    if (i / 2) % 2 == 0 {
+                        0.018
+                    } else {
+                        -0.018
+                    }
+                } else {
+                    0.0
+                };
+                voice + tuning_noise
+            })
+            .collect();
+        let speech_before = rms(&samples);
+        let mut high_ref = samples.clone();
+        apply_one_pole_highpass_zero_phase(
+            &mut high_ref,
+            sample_rate,
+            PATCH_BOUNDARY_SMOOTHER_LOWPASS_HZ,
+        );
+        let high_before = rms(&high_ref[patch_len..patch_len + sample_rate as usize / 100]);
+
+        let boundaries = apply_patch_boundary_smoother(&mut samples, sample_rate);
+
+        let mut high_after_ref = samples.clone();
+        apply_one_pole_highpass_zero_phase(
+            &mut high_after_ref,
+            sample_rate,
+            PATCH_BOUNDARY_SMOOTHER_LOWPASS_HZ,
+        );
+        let high_after = rms(&high_after_ref[patch_len..patch_len + sample_rate as usize / 100]);
+        let speech_after = rms(&samples);
+
+        assert!(boundaries > 0);
+        assert!(
+            high_after < high_before * 0.80,
+            "high_after={high_after:.6} high_before={high_before:.6} ratio={:.3}",
+            high_after / high_before
+        );
+        assert!(
+            speech_after > speech_before * 0.90,
+            "speech_after={speech_after:.6} speech_before={speech_before:.6}"
+        );
+    }
+
+    #[test]
+    fn highband_leveler_reduces_switching_background_without_muting_voice() {
+        let sample_rate = 48_000;
+        let frame_len = (sample_rate as usize * 20) / 1000;
+        let len = frame_len * 8;
+        let mut samples: Vec<f32> = (0..len)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                let voice = (2.0 * std::f32::consts::PI * 850.0 * t).sin() * 0.045;
+                let frame = i / frame_len;
+                let switching_hiss = if frame == 2 || frame == 5 {
+                    if (i / 2) % 2 == 0 {
+                        0.024
+                    } else {
+                        -0.024
+                    }
+                } else {
+                    if (i / 2) % 2 == 0 {
+                        0.004
+                    } else {
+                        -0.004
+                    }
+                };
+                voice + switching_hiss
+            })
+            .collect();
+
+        let voice_before = rms(&samples);
+        let mut high_before_ref = samples.clone();
+        apply_one_pole_highpass_zero_phase(
+            &mut high_before_ref,
+            sample_rate,
+            HIGHBAND_LEVELER_SPLIT_HZ,
+        );
+        let burst_before = rms(&high_before_ref[frame_len * 2..frame_len * 3]);
+
+        let frames = apply_highband_residual_leveler(&mut samples, sample_rate);
+
+        let mut high_after_ref = samples.clone();
+        apply_one_pole_highpass_zero_phase(
+            &mut high_after_ref,
+            sample_rate,
+            HIGHBAND_LEVELER_SPLIT_HZ,
+        );
+        let burst_after = rms(&high_after_ref[frame_len * 2..frame_len * 3]);
+        let voice_after = rms(&samples);
+
+        assert!(frames >= 2);
+        assert!(
+            burst_after < burst_before * 0.65,
+            "burst_after={burst_after:.6} burst_before={burst_before:.6}"
+        );
+        assert!(
+            voice_after > voice_before * 0.82,
+            "voice_after={voice_after:.6} voice_before={voice_before:.6}"
+        );
     }
 
     fn sine(len: usize, sample_rate: u32, hz: f32) -> Vec<f32> {

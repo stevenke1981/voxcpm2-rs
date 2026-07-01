@@ -59,3 +59,63 @@
 - `output/alignment_synth_short_seed102.wav` passed CUDA ASR for the main text.
 - `output/alignment_combined_seed102_v2.wav` logged `seq_len=273 max_len_base=30 max_len=190`.
 - Combined clone still needs follow-up because stop head did not fire before the target-length cap.
+
+## 2026-07-01 - Patch-boundary de-switch audio polish
+
+### Symptom
+
+- User-reported generated samples sounded like FM radio tuning or station switching.
+- Same seed/text analysis showed the largest discontinuities at ~160ms multiples, matching
+  `patch_size=4` latent frames decoded by AudioVAE at 48kHz output.
+
+### Flow Nodes
+
+- `polish_generated_speech`
+  - Runs after AudioVAE decode and before edge fades/headroom limiting.
+  - Now invokes `apply_patch_boundary_smoother`.
+- `apply_patch_boundary_smoother`
+  - Scans 160ms patch boundaries.
+  - Detects boundary-local high-frequency RMS ratio, full-band RMS ratio, ZCR delta, and sample-step jumps.
+  - Only smooths triggered boundaries by lowering high-frequency residual around the boundary.
+- `AudioPolishReport.patch_boundaries_smoothed`
+  - Exposes how many boundaries were touched in CLI metrics and stderr logs.
+
+### Evidence
+
+- `output/alignment_synth_short_seed102_patchsmooth.wav` generated on CUDA with seed 102.
+- Metrics: `patch_boundaries_smoothed=9`, `quiet_rms_before=0.01100325`,
+  `quiet_rms_after=0.0015115119`, `peak_after=0.5491458`.
+- Boundary comparison vs `output/alignment_synth_short_seed102.wav`:
+  max sample-step `0.0631 -> 0.0343`; worst high-frequency ratio `7.22 -> 5.62`.
+- faster-whisper large-v3-turbo CUDA ASR preserved the transcript:
+  `这是普通话测试` / `声音清楚自然`.
+
+## 2026-07-01 - High-band residual background leveler
+
+### Symptom
+
+- `output/alignment_synth_short_seed102_patchsmooth.wav` still had background switching/tuning noise.
+- A 20ms analysis window showed high-band residual jumps independent of simple sample clicks, with top
+  post-frame high-band RMS up to `0.03085`. The window size is a diagnostic choice from this analysis.
+
+### Flow Nodes
+
+- `polish_generated_speech`
+  - Runs `apply_highband_residual_leveler` after patch-boundary smoothing.
+- `apply_highband_residual_leveler`
+  - Splits speech at 4kHz into low/mid voice body and high-band residual.
+  - Computes per-20ms high-band target from full-band RMS, with a fixed maximum cap.
+  - Uses fast attack and slower release to stop background noise from opening abruptly.
+- `AudioPolishReport.highband_frames_leveled`
+  - Reports how many frames had high-band residual attenuation.
+
+### Evidence
+
+- `output/alignment_synth_short_seed102_highband.wav` generated on CUDA with seed 102.
+- Metrics: `patch_boundaries_smoothed=9`, `highband_frames_leveled=54`,
+  `peak_after=0.5435606`, `quiet_rms_after=0.0015115119`.
+- Compared with `alignment_synth_short_seed102_patchsmooth.wav`:
+  top 20ms post high-band RMS max `0.03085 -> 0.01131`; top 20ms post high-band
+  average `0.00735 -> 0.00377`.
+- faster-whisper large-v3-turbo CUDA ASR preserved the transcript:
+  `这是普通话测试` / `声音清楚自然`.
