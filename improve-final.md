@@ -41,6 +41,11 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 - 真實模型 CUDA + ASR accepted baseline 已完成：seed 102 通過 Mandarin short、midburst、
   fricatives 與 clone 四個 required-term gate；seed 99 仍保留為 regression probe，但本次短句
   ASR 未通過，因此不作為 accepted baseline。
+- Quality sweep harness 已新增：`harness/quality_sweep.ps1` 可用 ASR similarity、required terms、
+  high-ZCR、quiet RMS、clone reference floor 與 peak penalty 比較 seed/cfg/latent_norm/scheduler。
+- Targeted CUDA + ASR sweep 已跑 seed 102、cfg 2.3/2.5、latent default/0.7875、uniform scheduler，
+  Mandarin short 與 midburst 兩句皆 ASR similarity=1.0 且 required terms 通過；目前最佳候選是
+  `seed102_cfg2p5_lndefault_uniform`，但尚未含 clone/full prompt matrix，因此先不取代 accepted baseline。
 
 ## 最終完成定義
 
@@ -71,6 +76,6 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 
 ## 下一個 commit 建議
 
-下一個實作 commit 建議只做一件事：補 clone sequence/token mask parity fixture，對齊 Python/C++
-reference-only、prompt-only continuation 與 combined mode。音質/ASR baseline 已有 release evidence，
-下一個風險最高的是 clone 模式完整性。
+下一個實作 commit 建議只做一件事：把 `seed102_cfg2p5_lndefault_uniform` 放進完整 CUDA + ASR
+matrix，補 clone case 與 fricatives case；若 full sweep 仍勝過既有 seed 102 baseline，再更新
+accepted baseline，否則轉向 clone sequence/token mask parity fixture。

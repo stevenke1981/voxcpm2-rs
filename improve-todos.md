@@ -61,6 +61,14 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
   - 狀態：已新增 clean/noisy/long synthetic fixture matrix；`SynthMetricsReport` 會輸出
     `clone_reference_trim`，真實模型 gate 仍需補 ASR transcript baseline。
 
+- [x] **建立 multi-seed / CFG / latent normalization quality sweep**
+  - 新增 `harness/quality_sweep.ps1`，可掃 seed、CFG、latent norm 與 scheduler。
+  - 驗收：輸出 CSV/JSON/Markdown summary，分數同時納入 ASR required-term、normalized text similarity、
+    high-ZCR frame、quiet RMS、clone reference floor 與 near-clipping penalty。
+  - 狀態：已完成 harness，並已用 CUDA + ASR 跑 seed 102 targeted probe；`cfg=2.5`、latent default、
+    uniform scheduler 目前在 Mandarin short/midburst 兩句最佳。下一步是把該候選放進完整矩陣，補
+    clone 與 fricatives 後再決定是否更新 accepted baseline。
+
 ## P1 - Voice clone parity 與模式完整性
 
 - [ ] **補齊 clone 模式矩陣**

@@ -223,6 +223,63 @@ CLI language-risk smoke：
 - dry-run 只能證明 harness 可執行，不能標成真實語音 accepted baseline。
 - 本次 accepted baseline 使用 seed 102；seed 99 保留為 regression probe，但不作為通過基準。
 
+品質參數 sweep：
+
+```powershell
+.\harness\quality_sweep.ps1 `
+  -ModelDir models\VoxCPM2 `
+  -Device cuda `
+  -RefAudio ref_15s.wav `
+  -OutDir output\quality-sweep `
+  -Seeds 99,100,101,102 `
+  -CfgValues 2.0,2.3,2.5,2.7 `
+  -LatentNormValues "",0.72,0.7875,0.85 `
+  -Schedulers uniform,log-norm `
+  -RunAsr
+```
+
+快速 smoke：
+
+```powershell
+.\harness\quality_sweep.ps1 `
+  -Device cpu `
+  -DryRun `
+  -SkipClone `
+  -CaseIds mandarin_seed99_short `
+  -Seeds 102 `
+  -CfgValues 2.5 `
+  -LatentNormValues "" `
+  -Schedulers uniform `
+  -MaxCombos 1
+```
+
+已驗證的 targeted CUDA + ASR probe：
+
+```powershell
+$latents = @("", "0.7875")
+.\harness\quality_sweep.ps1 `
+  -ModelDir models\VoxCPM2 `
+  -Device cuda `
+  -RefAudio ref_15s.wav `
+  -OutDir output\quality-sweep-targeted `
+  -Seeds 102 `
+  -CfgValues 2.3,2.5 `
+  -LatentNormValues $latents `
+  -Schedulers uniform `
+  -CaseIds mandarin_seed99_short,mandarin_seed99_midburst `
+  -RunAsr `
+  -MaxCombos 4
+```
+
+結果：8 個真實 CUDA 輸出皆 ASR similarity=1.0 且 required terms 通過；最佳候選為
+`seed102_cfg2p5_lndefault_uniform`，cases=2、total_high_zcr=39、max_peak=0.8040、avg_score=116.01。
+
+通過條件：
+
+- 產生 `quality_sweep_results.csv`、`quality_sweep_results.json`、`quality_sweep_summary.md`。
+- summary 依 ASR required-term、文字相似度、high-ZCR、quiet RMS 與 peak penalty 排序。
+- 新 accepted baseline 只能從 `-RunAsr` 的真實 CUDA sweep 結果挑選，不得用 dry-run 或只看單一音訊指標。
+
 ## G6 - GUI smoke
 
 手動或 Playwright/Windows UI harness：
