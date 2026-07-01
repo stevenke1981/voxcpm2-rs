@@ -35,9 +35,9 @@ impl StopHead {
     ///   x = SiLU(x)            # in-place activation
     ///   x = stop_head(x)       # [B, T, 2]
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let h = self.stop_proj.forward(x)?;        // [B, T, 2048]
-        let h = candle_nn::ops::silu(&h)?;         // [B, T, 2048]
-        self.stop_head.forward(&h)                 // [B, T, 2]
+        let h = self.stop_proj.forward(x)?; // [B, T, 2048]
+        let h = candle_nn::ops::silu(&h)?; // [B, T, 2048]
+        self.stop_head.forward(&h) // [B, T, 2]
     }
 
     /// Convenience: check whether to stop given the logits.
@@ -46,10 +46,14 @@ impl StopHead {
     pub fn should_stop(&self, logits: &Tensor) -> Result<bool> {
         // Take last position and compute argmax
         let last = logits.narrow(1, logits.dim(1)? - 1, 1)?; // [B, 1, 2]
-        let last = last.squeeze(1)?;                           // [B, 2]
-        // softmax to get probabilities
+        let last = last.squeeze(1)?; // [B, 2]
+                                     // softmax to get probabilities
         let probs = candle_nn::ops::softmax(&last, 1)?;
-        let p_stop = probs.narrow(1, 1, 1)?.squeeze(1)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let p_stop = probs
+            .narrow(1, 1, 1)?
+            .squeeze(1)?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
         Ok(p_stop[0] > 0.5)
     }
 }

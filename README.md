@@ -101,6 +101,40 @@ cargo run -p voxcpm2-cli --features cpu -- clone `
   --out output/clone.wav
 ```
 
+目前 CLI clone 對齊 OpenBMB/VoxCPM 與 voxcpm-cpp 的三種輸入形態：
+
+```powershell
+# reference-only
+cargo run -p voxcpm2-cli --features cpu -- clone `
+  --model-dir models/VoxCPM2 `
+  --ref-audio fixtures/ref.wav `
+  --text "这是授权声音复制测试。" `
+  --i-have-consent `
+  --out output/clone_ref.wav
+
+# prompt-only continuation，必須提供 prompt 音訊逐字稿
+cargo run -p voxcpm2-cli --features cpu -- clone `
+  --model-dir models/VoxCPM2 `
+  --prompt-audio fixtures/prompt.wav `
+  --prompt-text "这是提示音频的准确文字。" `
+  --text "这是接续生成的普通话测试。" `
+  --i-have-consent `
+  --out output/clone_prompt.wav
+
+# reference + prompt combined
+cargo run -p voxcpm2-cli --features cpu -- clone `
+  --model-dir models/VoxCPM2 `
+  --ref-audio fixtures/ref.wav `
+  --prompt-audio fixtures/prompt.wav `
+  --prompt-text "这是提示音频的准确文字。" `
+  --text "这是结合参考音色与提示音频的普通话测试。" `
+  --i-have-consent `
+  --out output/clone_combined.wav
+```
+
+GUI clone 目前仍只暴露 reference-only 操作；prompt-only 與 combined 已在 pipeline/CLI
+完成，待下一輪補 UI 控制與真實模型 CUDA + ASR gate。
+
 ## 重要限制
 
 1. VoxCPM2 不是單純 LLaMA 架構；必須重建 LocEnc → TSLM → RALM → LocDiT → AudioVAE V2。

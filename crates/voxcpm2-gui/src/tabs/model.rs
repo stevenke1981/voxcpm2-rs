@@ -100,32 +100,42 @@ impl ModelTab {
             "model.safetensors:\n  Tensors: {}\n  Total params: {}\n  Dtypes: {:?}",
             manifest.num_tensors.unwrap_or(0),
             manifest.total_params.unwrap_or(0),
-            manifest.dtype_counts.as_ref().map(|d| d.iter().map(|(k,v)| format!("{k}:{v}")).collect::<Vec<_>>().join(", ")).unwrap_or_default(),
+            manifest
+                .dtype_counts
+                .as_ref()
+                .map(|d| d
+                    .iter()
+                    .map(|(k, v)| format!("{k}:{v}"))
+                    .collect::<Vec<_>>()
+                    .join(", "))
+                .unwrap_or_default(),
         ));
 
         self.show_asset_report(&model_dir);
     }
 
     fn show_asset_report(&mut self, model_dir: &PathBuf) {
-        let report = full_asset_report(model_dir, false).unwrap_or_else(|_| {
-            AssetReport {
-                files: vec![],
-                manifest: SafetensorsManifest {
-                    path: model_dir.join("model.safetensors"),
-                    exists: false,
-                    num_tensors: None,
-                    total_params: None,
-                    dtype_counts: None,
-                    tensor_names: None,
-                },
-                audiovae_manifest: None,
-                fixes: vec![],
-                model_ready: false,
-            }
+        let report = full_asset_report(model_dir, false).unwrap_or_else(|_| AssetReport {
+            files: vec![],
+            manifest: SafetensorsManifest {
+                path: model_dir.join("model.safetensors"),
+                exists: false,
+                num_tensors: None,
+                total_params: None,
+                dtype_counts: None,
+                tensor_names: None,
+            },
+            audiovae_manifest: None,
+            fixes: vec![],
+            model_ready: false,
         });
         let mut lines = Vec::new();
         for f in &report.files {
-            lines.push(format!("  {}  {}", if f.exists { "✅" } else { "❌" }, f.path.display()));
+            lines.push(format!(
+                "  {}  {}",
+                if f.exists { "✅" } else { "❌" },
+                f.path.display()
+            ));
         }
         self.manifest_info = Some(lines.join("\n"));
     }

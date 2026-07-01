@@ -111,3 +111,15 @@ VS 2022 Community 安裝於非預設路徑（`C:\Program Files\Microsoft Visual 
 **Trigger:** A Mandarin sample still had audible noise in the middle even after background gating.
 **Rule:** If noise appears in the middle of a spoken phrase, inspect high-ZCR and 4-8kHz band energy before changing background gates; fricative-like broadband bursts need a local harsh-midband smoother, not more silence gating.
 **Source:** Mandarin mid-section noise pass
+
+---
+## Lesson #11 — 2026-07-01
+**Trigger:** Align Rust/Candle voice generation with OpenBMB/VoxCPM and voxcpm-cpp after reference-only clone already worked.
+**Rule:** Clone parity is not only reference speaker embedding. Keep the official sequence modes distinct: reference audio uses right padding and `ref_audio_start/ref_audio_end`; prompt continuation uses left padding, prepends `prompt_text + target_text` before tokenization, appends prompt audio patches after `audio_start`, and seeds the first CFM step from the last prompt latent patch.
+**Source:** OpenBMB/VoxCPM `_generate()` / `_inference()` and voxcpm-cpp clone sequence alignment
+
+---
+## Lesson #12 — 2026-07-01
+**Trigger:** Combined reference+prompt clone generated much longer audio than target text warranted.
+**Rule:** In clone/continuation modes, AR length caps must use target text token length, not combined sequence length. Reference/prompt audio patches are context, not target text. Audio patch placeholder token IDs should stay `0` to match OpenBMB and voxcpm-cpp sequence fixtures.
+**Source:** OpenBMB/VoxCPM `max_len=min(target_text_length*6+10,max_len)` and voxcpm-cpp `vcpm_seq_build_clone`

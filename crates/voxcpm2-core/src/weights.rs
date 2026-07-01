@@ -92,7 +92,9 @@ fn fuse_weight_norm(tensors: &mut HashMap<String, Tensor>) -> Result<()> {
     if fused == 0 {
         eprintln!("[fuse_weight_norm] WARNING: no weight_g/weight_v pairs found — already fused?");
     } else {
-        eprintln!("[fuse_weight_norm] fused {fused} weight_norm pairs (with v/||v|| normalization)");
+        eprintln!(
+            "[fuse_weight_norm] fused {fused} weight_norm pairs (with v/||v|| normalization)"
+        );
     }
 
     Ok(())

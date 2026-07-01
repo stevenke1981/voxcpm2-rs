@@ -118,8 +118,12 @@ pub struct CfmConfig {
     pub t_scheduler_std: f64,
 }
 
-fn default_lognorm_mean() -> f64 { -1.0 }
-fn default_lognorm_std() -> f64 { 0.6 }
+fn default_lognorm_mean() -> f64 {
+    -1.0
+}
+fn default_lognorm_std() -> f64 {
+    0.6
+}
 
 impl Default for CfmConfig {
     fn default() -> Self {

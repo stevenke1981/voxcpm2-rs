@@ -103,6 +103,8 @@ impl SynthTab {
                     latent_norm_scale: self.latent_norm_scale,
                     ref_audio_path: None,
                     ref_transcript: None,
+                    prompt_audio_path: None,
+                    prompt_text: None,
                     clone_strength: 1.0,
                     metrics_output_path: Some(metrics_path_for_output(&self.output_path)),
                 };

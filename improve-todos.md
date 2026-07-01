@@ -73,14 +73,33 @@ clone reference polish、egui worker 與 model cache；接下來的重點不是�
 
 - [ ] **補齊 clone 模式矩陣**
   - 參考 `voxcpm-cpp` 的 reference-only、prompt-only continuation、combined 三種模式。
-  - Rust 目前 CLI 只有 `--ref-audio`，`ref_transcript` 欄位尚未接到 CLI。
+  - Rust CLI 已對齊 `voxcpm-cpp` clone 輸入形態：`--ref-audio`、`--prompt-audio --prompt-text`、
+    以及 reference + prompt combined；pipeline 會將 `prompt_text + target_text` 先拼成同一段
+    UTF-8 再 tokenizer，避免 BPE 邊界偏移。
   - 驗收：CLI/GUI 至少定義 roadmap 與錯誤訊息；實作後三種模式都要有 smoke。
+  - 狀態：CLI/pipeline 基礎已完成並有單元測試；GUI 仍只暴露 reference-only UI，prompt/combined
+    需要下一輪補 UI 控制與真實模型 smoke。
 
-- [ ] **clone sequence/token mask parity**
-  - 目前 Rust clone sequence 為 `[ref_audio_start, pad x n, ref_audio_end, text...]`。
+- [x] **clone sequence/token mask parity**
+  - Rust clone sequence 已對齊官方 Python：
+    reference-only = `[ref_audio_start, ref_patches, ref_audio_end, text+audio_start]`；
+    prompt-only = `[prompt_text+target_text+audio_start, prompt_patches]`；
+    combined = `[ref_prefix, prompt_text+target_text+audio_start, prompt_patches]`。
   - 對照 Python/C++ fixture，檢查 reference padding 方向、prompt padding 方向、first generation
     position、text/audio mask。
   - 驗收：固定 synthetic audio fixture 的 combined ids、mask 長度、patch 數一致。
+  - 狀態：已補 reference right-padding、prompt left-padding、prompt 最後一個 latent patch 作為
+    CFM initial condition、audio patch token id=`0`、AR max_len 使用 target text token 長度；
+    仍需改善 prompt-only/combined clone 的 ASR 細節與 stop head 穩定性。
+
+- [ ] **prompt/combined clone quality follow-up**
+  - 本輪真實 CUDA smoke：
+    - prompt-only: `output/alignment_prompt_only_seed102.wav`，ASR 可抓到主要語意但「这是接续生成」
+      被辨成近似錯詞。
+    - combined: `output/alignment_combined_seed102_v2.wav`，已由 target-length cap 限制到 30.4s，
+      但 faster-whisper large-v3-turbo CUDA 對該檔 crash。
+  - 下一步：針對 prompt/combined clone 做 seed/cfg/stop threshold 小矩陣，並切 5-10 秒窗做 ASR
+    定位，確認是 stop head、latent 分佈還是 ASR engine 對該音訊不穩。
 
 ## P2 - 效能與可發布性
 

@@ -9,8 +9,10 @@ fn data_dir() -> PathBuf {
     // CARGO_MANIFEST_DIR points to the crate root (voxcpm2-core)
     // The workspace root is two levels up
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join("data")
 }
 use candle_nn::{ConvTranspose1d, ConvTranspose1dConfig};
@@ -41,18 +43,35 @@ fn check_candle_convtranspose1d() {
         let input_path = d.join(format!("{prefix}_x.npy"));
         let expected_path = d.join(format!("{prefix}_y.npy"));
 
-        let weight = Tensor::read_npy(weight_path).unwrap().to_device(&dev).unwrap();
-        let bias = Tensor::read_npy(bias_path).unwrap().to_device(&dev).unwrap();
-        let input = Tensor::read_npy(input_path).unwrap().to_device(&dev).unwrap();
-        let expected_t = Tensor::read_npy(expected_path).unwrap().to_device(&dev).unwrap();
+        let weight = Tensor::read_npy(weight_path)
+            .unwrap()
+            .to_device(&dev)
+            .unwrap();
+        let bias = Tensor::read_npy(bias_path)
+            .unwrap()
+            .to_device(&dev)
+            .unwrap();
+        let input = Tensor::read_npy(input_path)
+            .unwrap()
+            .to_device(&dev)
+            .unwrap();
+        let expected_t = Tensor::read_npy(expected_path)
+            .unwrap()
+            .to_device(&dev)
+            .unwrap();
 
         // Check shapes
-        assert_eq!(weight.shape().dims(), &[*in_ch, *out_ch, *k],
-            "{prefix} weight shape");
-        assert_eq!(bias.shape().dims(), &[*out_ch],
-            "{prefix} bias shape");
-        assert_eq!(input.shape().dims(), &[1, *in_ch, 16],
-            "{prefix} input shape");
+        assert_eq!(
+            weight.shape().dims(),
+            &[*in_ch, *out_ch, *k],
+            "{prefix} weight shape"
+        );
+        assert_eq!(bias.shape().dims(), &[*out_ch], "{prefix} bias shape");
+        assert_eq!(
+            input.shape().dims(),
+            &[1, *in_ch, 16],
+            "{prefix} input shape"
+        );
 
         let cfg = ConvTranspose1dConfig {
             padding: *pad,
@@ -68,21 +87,36 @@ fn check_candle_convtranspose1d() {
 
         fn flatten_3d(v: &[Vec<Vec<f32>>]) -> Vec<f32> {
             let mut out = Vec::new();
-            for b in v { for t in b { for &x in t { out.push(x); } } }
+            for b in v {
+                for t in b {
+                    for &x in t {
+                        out.push(x);
+                    }
+                }
+            }
             out
         }
         let expected_flat = flatten_3d(&expected);
         let actual_flat = flatten_3d(&actual);
         let diff = max_diff(&expected_flat, &actual_flat);
 
-        let peak: f32 = out.abs().unwrap().flatten_all().unwrap().max_all().unwrap().to_scalar().unwrap();
-        println!("{prefix}: shape={:?}, peak={:.6}, max_diff={:.8} (tolerance=1e-4)",
-            out.shape(), peak, diff);
-
-        assert!(
-            diff < 1e-4,
-            "{prefix} mismatch: max_diff={diff:.8} >= 1e-4"
+        let peak: f32 = out
+            .abs()
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .max_all()
+            .unwrap()
+            .to_scalar()
+            .unwrap();
+        println!(
+            "{prefix}: shape={:?}, peak={:.6}, max_diff={:.8} (tolerance=1e-4)",
+            out.shape(),
+            peak,
+            diff
         );
+
+        assert!(diff < 1e-4, "{prefix} mismatch: max_diff={diff:.8} >= 1e-4");
     }
 
     println!("\nAll ConvTranspose1d tests PASSED");

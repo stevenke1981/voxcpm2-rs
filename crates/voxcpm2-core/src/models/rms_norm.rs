@@ -73,8 +73,18 @@ mod tests {
         // [B=2, T=3, D=4] — the old mean_keepdim(1) would
         // normalize over T instead of D, producing wrong results
         let x = Tensor::new(
-            &[[[1.0f32, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0]],
-              [[13.0, 14.0, 15.0, 16.0], [17.0, 18.0, 19.0, 20.0], [21.0, 22.0, 23.0, 24.0]]],
+            &[
+                [
+                    [1.0f32, 2.0, 3.0, 4.0],
+                    [5.0, 6.0, 7.0, 8.0],
+                    [9.0, 10.0, 11.0, 12.0],
+                ],
+                [
+                    [13.0, 14.0, 15.0, 16.0],
+                    [17.0, 18.0, 19.0, 20.0],
+                    [21.0, 22.0, 23.0, 24.0],
+                ],
+            ],
             &dev,
         )?;
         let y = norm.forward(&x)?;
@@ -86,9 +96,15 @@ mod tests {
         // With correct fix, they should differ
         let y_slice = y.to_vec3::<f32>()?;
         // y[0,0,:] and y[0,1,:] MUST be different (different input, independent norm)
-        assert_ne!(y_slice[0][0], y_slice[0][1], "3D RMSNorm: positions must be normalized independently");
+        assert_ne!(
+            y_slice[0][0], y_slice[0][1],
+            "3D RMSNorm: positions must be normalized independently"
+        );
         // y[0,0,:] and y[1,0,:] should also differ
-        assert_ne!(y_slice[0][0], y_slice[1][0], "3D RMSNorm: batches must differ");
+        assert_ne!(
+            y_slice[0][0], y_slice[1][0],
+            "3D RMSNorm: batches must differ"
+        );
         Ok(())
     }
 }

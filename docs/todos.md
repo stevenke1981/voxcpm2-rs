@@ -78,6 +78,9 @@
 - [x] Clone reference fixture gate：clean/noisy/long synthetic reference 單元測試覆蓋 reference polish、speech preservation 與 30 秒 trim 診斷；clone metrics 會輸出 `clone_reference_trim`。
 - [x] Accepted baseline writer：新增 `harness/write_acceptance_baseline.ps1`，可重跑 quality gate、彙整 commit/WAV/metrics/quality sidecar，並可選擇執行 ASR required-term 檢查產生 release evidence。
 - [x] Quality sweep harness：新增 `harness/quality_sweep.ps1`，可掃 seed/cfg/latent_norm/scheduler，並以 ASR similarity、required terms、high-ZCR、quiet RMS、clone reference floor 與 peak penalty 排序；targeted CUDA+ASR probe 目前以 `seed102_cfg2p5_lndefault_uniform` 為最佳 full-matrix 候選。
+- [x] 對齊 OpenBMB/VoxCPM 與 voxcpm-cpp clone 生成序列：CLI/pipeline 支援 reference-only、prompt-only continuation、reference+prompt combined；reference audio right padding、prompt audio left padding，且 prompt 最後 latent patch 會作為 CFM 初始 condition。
+- [x] 對齊官方/C++ audio patch placeholder 與生成長度：clone audio patch token id 改為 `0`；AR `max_len` 改用 target text token 長度，避免 reference/prompt patches 放大生成長度。
+- [ ] 真實模型 prompt/combined clone gate：以 CUDA + ASR 驗證 `--prompt-audio --prompt-text` 與 reference+prompt combined 不退化，並補 GUI prompt/combined 控制。
 
 ## Milestone I：egui
 

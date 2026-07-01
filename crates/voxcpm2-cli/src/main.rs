@@ -48,9 +48,15 @@ enum Command {
     Clone {
         #[arg(long)]
         text: String,
-        /// Path to reference audio WAV file for voice cloning.
+        /// Path to independent reference audio WAV file for voice cloning.
         #[arg(long)]
-        ref_audio: PathBuf,
+        ref_audio: Option<PathBuf>,
+        /// Continuation prompt WAV. Requires --prompt-text.
+        #[arg(long)]
+        prompt_audio: Option<PathBuf>,
+        /// Exact UTF-8 transcript of --prompt-audio.
+        #[arg(long)]
+        prompt_text: Option<String>,
         #[arg(long, default_value = "output/clone.wav")]
         out: PathBuf,
         #[arg(long)]
@@ -145,6 +151,8 @@ fn main() -> anyhow::Result<()> {
                 latent_norm_scale: latent_norm,
                 ref_audio_path: None,
                 ref_transcript: None,
+                prompt_audio_path: None,
+                prompt_text: None,
                 clone_strength: 1.0,
                 metrics_output_path: metrics_out,
             };
@@ -154,6 +162,8 @@ fn main() -> anyhow::Result<()> {
         Command::Clone {
             text,
             ref_audio,
+            prompt_audio,
+            prompt_text,
             out,
             model_dir,
             device,
@@ -172,6 +182,11 @@ fn main() -> anyhow::Result<()> {
             i_have_consent,
         } => {
             ensure_clone_consent(i_have_consent)?;
+            ensure_clone_audio_input(
+                ref_audio.as_ref(),
+                prompt_audio.as_ref(),
+                prompt_text.as_deref(),
+            )?;
             let mut pipe = VoxPipeline::new(&device, model_dir.as_deref(), dry_run)?;
             let req = SynthRequest {
                 text,
@@ -188,8 +203,10 @@ fn main() -> anyhow::Result<()> {
                 label_ai_generated,
                 t_scheduler,
                 latent_norm_scale: latent_norm,
-                ref_audio_path: Some(ref_audio),
+                ref_audio_path: ref_audio,
                 ref_transcript: None,
+                prompt_audio_path: prompt_audio,
+                prompt_text,
                 clone_strength,
                 metrics_output_path: metrics_out,
             };
@@ -233,6 +250,22 @@ fn ensure_clone_consent(i_have_consent: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn ensure_clone_audio_input(
+    ref_audio: Option<&PathBuf>,
+    prompt_audio: Option<&PathBuf>,
+    prompt_text: Option<&str>,
+) -> anyhow::Result<()> {
+    if ref_audio.is_none() && prompt_audio.is_none() {
+        anyhow::bail!(
+            "voice clone requires --ref-audio, --prompt-audio, or both; use synth for text-only generation"
+        );
+    }
+    if prompt_audio.is_some() && prompt_text.map(str::trim).unwrap_or("").is_empty() {
+        anyhow::bail!("--prompt-text is required when --prompt-audio is provided");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,5 +280,24 @@ mod tests {
     #[test]
     fn clone_consent_gate_allows_confirmed_request() {
         ensure_clone_consent(true).unwrap();
+    }
+
+    #[test]
+    fn clone_audio_input_requires_some_audio() {
+        let err = ensure_clone_audio_input(None, None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--ref-audio"));
+        assert!(err.contains("--prompt-audio"));
+    }
+
+    #[test]
+    fn clone_audio_input_requires_prompt_text_for_prompt_audio() {
+        let prompt = PathBuf::from("prompt.wav");
+        let err = ensure_clone_audio_input(None, Some(&prompt), None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--prompt-text"));
+        ensure_clone_audio_input(None, Some(&prompt), Some("prompt transcript")).unwrap();
     }
 }

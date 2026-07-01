@@ -12,11 +12,13 @@ use voxcpm2_core::models::RMSNorm;
 
 /// Apply RoPE with external cos/sin tables (from golden reference).
 fn apply_rope_cos_sin(
-    q: &Tensor, k: &Tensor,
-    cos: &Tensor, sin: &Tensor,  // [seq_len, half]
+    q: &Tensor,
+    k: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor, // [seq_len, half]
 ) -> candle_core::Result<(Tensor, Tensor)> {
     // q,k: [B, S, H, D]; cos,sin: [S, D/2]
-    let cos = cos.unsqueeze(0)?.unsqueeze(2)?;  // [1, S, 1, D/2]
+    let cos = cos.unsqueeze(0)?.unsqueeze(2)?; // [1, S, 1, D/2]
     let sin = sin.unsqueeze(0)?.unsqueeze(2)?;
     let half = q.dim(3)? / 2;
     let q1 = q.narrow(3, 0, half)?;
@@ -24,21 +26,33 @@ fn apply_rope_cos_sin(
     let k1 = k.narrow(3, 0, half)?;
     let k2 = k.narrow(3, half, half)?;
     let q_rot = Tensor::cat(
-        &[&(q1.broadcast_mul(&cos)? - q2.broadcast_mul(&sin)?)?,
-          &(q1.broadcast_mul(&sin)? + q2.broadcast_mul(&cos)?)?], 3)?;
+        &[
+            &(q1.broadcast_mul(&cos)? - q2.broadcast_mul(&sin)?)?,
+            &(q1.broadcast_mul(&sin)? + q2.broadcast_mul(&cos)?)?,
+        ],
+        3,
+    )?;
     let k_rot = Tensor::cat(
-        &[&(k1.broadcast_mul(&cos)? - k2.broadcast_mul(&sin)?)?,
-          &(k1.broadcast_mul(&sin)? + k2.broadcast_mul(&cos)?)?], 3)?;
+        &[
+            &(k1.broadcast_mul(&cos)? - k2.broadcast_mul(&sin)?)?,
+            &(k1.broadcast_mul(&sin)? + k2.broadcast_mul(&cos)?)?,
+        ],
+        3,
+    )?;
     Ok((q_rot, k_rot))
 }
 
 /// Cosine similarity.
 fn cosine_sim(a: &[f32], b: &[f32]) -> f64 {
-    if a.len() != b.len() { return 0.0; }
+    if a.len() != b.len() {
+        return 0.0;
+    }
     let dot: f64 = a.iter().zip(b).map(|(x, y)| *x as f64 * *y as f64).sum();
     let na: f64 = a.iter().map(|x| *x as f64 * *x as f64).sum::<f64>().sqrt();
     let nb: f64 = b.iter().map(|x| *x as f64 * *x as f64).sum::<f64>().sqrt();
-    if na < 1e-30 || nb < 1e-30 { return 0.0; }
+    if na < 1e-30 || nb < 1e-30 {
+        return 0.0;
+    }
     dot / (na * nb)
 }
 
@@ -50,19 +64,33 @@ fn tensor_cosine_sim(a: &Tensor, b: &Tensor) -> f64 {
 }
 
 fn load_golden(golden: &HashMap<String, Tensor>, key: &str, expected: &[usize]) -> Tensor {
-    let t = golden.get(key).unwrap_or_else(|| panic!("missing golden '{key}'"));
+    let t = golden
+        .get(key)
+        .unwrap_or_else(|| panic!("missing golden '{key}'"));
     let actual: Vec<usize> = t.shape().dims().to_vec();
-    assert_eq!(&actual, expected, "golden '{key}': expected {expected:?}, got {actual:?}");
+    assert_eq!(
+        &actual, expected,
+        "golden '{key}': expected {expected:?}, got {actual:?}"
+    );
     t.clone()
 }
 
-fn lin_from_golden(golden: &HashMap<String, Tensor>, key: &str, d_in: usize, d_out: usize) -> Linear {
+fn lin_from_golden(
+    golden: &HashMap<String, Tensor>,
+    key: &str,
+    d_in: usize,
+    d_out: usize,
+) -> Linear {
     let w = load_golden(golden, &format!("{key}.weight"), &[d_out, d_in]);
     // Check if bias exists
     let bias_key = format!("{key}.bias");
     let bias = golden.get(&bias_key).map(|t| {
         let actual: Vec<usize> = t.shape().dims().to_vec();
-        assert_eq!(actual, [d_out], "golden '{bias_key}': expected [{d_out}], got {actual:?}");
+        assert_eq!(
+            actual,
+            [d_out],
+            "golden '{bias_key}': expected [{d_out}], got {actual:?}"
+        );
         t.clone()
     });
     Linear::new(w, bias)
@@ -71,10 +99,10 @@ fn lin_from_golden(golden: &HashMap<String, Tensor>, key: &str, d_in: usize, d_o
 // ── TSLM Layer 0 forward using crate components ────────────────────────────
 
 fn tslm_layer0_forward(
-    x: &Tensor,  // [1, 3, 2048] embed_out
+    x: &Tensor, // [1, 3, 2048] embed_out
     golden: &HashMap<String, Tensor>,
-    cos: &Tensor,  // [3, 64] golden cos table
-    sin: &Tensor,  // [3, 64] golden sin table
+    cos: &Tensor, // [3, 64] golden cos table
+    sin: &Tensor, // [3, 64] golden sin table
     eps: f64,
     num_heads: usize,
     num_kv_heads: usize,
@@ -95,9 +123,9 @@ fn tslm_layer0_forward(
     let q_lin = lin_from_golden(golden, "base_lm.layers.0.self_attn.q_proj", 2048, 2048);
     let k_lin = lin_from_golden(golden, "base_lm.layers.0.self_attn.k_proj", 2048, 256);
     let v_lin = lin_from_golden(golden, "base_lm.layers.0.self_attn.v_proj", 2048, 256);
-    let q = q_lin.forward(&h)?;  // [1, 3, 2048]
-    let k = k_lin.forward(&h)?;  // [1, 3, 256]
-    let v = v_lin.forward(&h)?;  // [1, 3, 256]
+    let q = q_lin.forward(&h)?; // [1, 3, 2048]
+    let k = k_lin.forward(&h)?; // [1, 3, 256]
+    let v = v_lin.forward(&h)?; // [1, 3, 256]
     out.insert("q_proj_out".into(), q.clone());
     out.insert("k_proj_out".into(), k.clone());
     out.insert("v_proj_out".into(), v.clone());
@@ -114,22 +142,25 @@ fn tslm_layer0_forward(
     // Python applies before transpose, so q,k are in [B, H, T, D] after RoPE.
     // We apply in [B, T, H, D], so transpose to match Python layout.
     let (q_rot, k_rot) = apply_rope_cos_sin(&q_heads, &k_heads, cos, sin)?;
-    out.insert("q_rope_out".into(), q_rot.transpose(1, 2)?);  // [1, 16, 3, 128]
-    out.insert("k_rope_out".into(), k_rot.transpose(1, 2)?);  // [1, 2, 3, 128]
+    out.insert("q_rope_out".into(), q_rot.transpose(1, 2)?); // [1, 16, 3, 128]
+    out.insert("k_rope_out".into(), k_rot.transpose(1, 2)?); // [1, 2, 3, 128]
 
     // ── GQA attention ──
     // Transpose to [B, H, T, D] for SDPA (Python does apply_rope before transpose,
     // but the reshape is [B,T,H,D]→[B,H,T,D] in Python. In our Rust we use
     // [B,T,H,D] layout throughout, so we transpose here for SDPA.)
-    let q_rot_t = q_rot.transpose(1, 2)?;  // [1, 16, 3, 128]
-    let k_rot_t = k_rot.transpose(1, 2)?;  // [1, 2, 3, 128]
+    let q_rot_t = q_rot.transpose(1, 2)?; // [1, 16, 3, 128]
+    let k_rot_t = k_rot.transpose(1, 2)?; // [1, 2, 3, 128]
 
     let group_size = num_heads / num_kv_heads;
     // Expand KV heads: [1, 2, 3, 128] → [1, 16, 3, 128]
-    let k_exp = k_rot_t.unsqueeze(2)?
+    let k_exp = k_rot_t
+        .unsqueeze(2)?
         .expand((1, num_kv_heads, group_size, seq_len, head_dim))?
         .reshape((1, num_heads, seq_len, head_dim))?;
-    let v_exp = v.reshape((1, seq_len, num_kv_heads, head_dim))?.transpose(1, 2)?
+    let v_exp = v
+        .reshape((1, seq_len, num_kv_heads, head_dim))?
+        .transpose(1, 2)?
         .unsqueeze(2)?
         .expand((1, num_kv_heads, group_size, seq_len, head_dim))?
         .reshape((1, num_heads, seq_len, head_dim))?;
@@ -138,10 +169,12 @@ fn tslm_layer0_forward(
     let scale = (head_dim as f64).powf(-0.5);
     let attn = (q_rot_t.matmul(&k_exp.transpose(2, 3)?)? * scale)?; // [1, 16, 3, 3]
     let attn = candle_nn::ops::softmax(&attn, 3)?;
-    let attn_out = attn.matmul(&v_exp)?;  // [1, 16, 3, 128]
+    let attn_out = attn.matmul(&v_exp)?; // [1, 16, 3, 128]
 
     // Transpose back and O projection
-    let attn_out = attn_out.transpose(1, 2)?.reshape((1, seq_len, num_heads * head_dim))?; // [1, 3, 2048]
+    let attn_out = attn_out
+        .transpose(1, 2)?
+        .reshape((1, seq_len, num_heads * head_dim))?; // [1, 3, 2048]
     let o_lin = lin_from_golden(golden, "base_lm.layers.0.self_attn.o_proj", 2048, 2048);
     let attn_out = o_lin.forward(&attn_out)?;
     out.insert("attn_output".into(), attn_out.clone());
@@ -152,7 +185,11 @@ fn tslm_layer0_forward(
 
     // ── Post-attention RMSNorm (using fixed crate RMSNorm) ──
     let post_norm = RMSNorm::new(
-        load_golden(golden, "base_lm.layers.0.post_attention_layernorm.weight", &[2048]),
+        load_golden(
+            golden,
+            "base_lm.layers.0.post_attention_layernorm.weight",
+            &[2048],
+        ),
         eps,
     )?;
     let h_norm = post_norm.forward(&h)?;
@@ -179,14 +216,17 @@ fn golden_tslm_layer0() -> anyhow::Result<()> {
     let dev = Device::Cpu;
 
     let golden_path = Path::new("../../golden/tslm_layer0.safetensors");
-    assert!(golden_path.exists(),
-        "golden file not found; run: python scripts/golden_tslm.py");
+    assert!(
+        golden_path.exists(),
+        "golden file not found; run: python scripts/golden_tslm.py"
+    );
     let golden = candle_core::safetensors::load(golden_path, &dev)?;
 
     // Config
     let eps = load_golden(&golden, "config_rms_norm_eps", &[1]).to_vec1::<f64>()?[0];
     let num_heads = load_golden(&golden, "config_num_heads", &[1]).to_vec1::<i32>()?[0] as usize;
-    let num_kv_heads = load_golden(&golden, "config_num_kv_heads", &[1]).to_vec1::<i32>()?[0] as usize;
+    let num_kv_heads =
+        load_golden(&golden, "config_num_kv_heads", &[1]).to_vec1::<i32>()?[0] as usize;
     let head_dim = load_golden(&golden, "config_head_dim", &[1]).to_vec1::<i32>()?[0] as usize;
 
     println!("Config: heads={num_heads} kv_heads={num_kv_heads} head_dim={head_dim} eps={eps}");
@@ -200,15 +240,34 @@ fn golden_tslm_layer0() -> anyhow::Result<()> {
 
     // Run Candle forward
     let rust_out = tslm_layer0_forward(
-        &embed_out, &golden, &cos, &sin, eps, num_heads, num_kv_heads, head_dim,
+        &embed_out,
+        &golden,
+        &cos,
+        &sin,
+        eps,
+        num_heads,
+        num_kv_heads,
+        head_dim,
     )?;
 
     // Compare
     let checks: &[(&str, &str, &[usize])] = &[
-        ("after_input_layernorm", "golden_after_input_layernorm", &[1, 3, 2048]),
+        (
+            "after_input_layernorm",
+            "golden_after_input_layernorm",
+            &[1, 3, 2048],
+        ),
         ("attn_output", "golden_attn_output", &[1, 3, 2048]),
-        ("after_attention_residual", "golden_after_attention_residual", &[1, 3, 2048]),
-        ("after_post_layernorm", "golden_after_post_layernorm", &[1, 3, 2048]),
+        (
+            "after_attention_residual",
+            "golden_after_attention_residual",
+            &[1, 3, 2048],
+        ),
+        (
+            "after_post_layernorm",
+            "golden_after_post_layernorm",
+            &[1, 3, 2048],
+        ),
         ("mlp_output", "golden_mlp_output", &[1, 3, 2048]),
         ("layer_output", "golden_layer_output", &[1, 3, 2048]),
     ];

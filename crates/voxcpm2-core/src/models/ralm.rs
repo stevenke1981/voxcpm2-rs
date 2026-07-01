@@ -144,11 +144,10 @@ impl RalmLayer {
         let attn_weights = candle_nn::ops::softmax(&attn_weights, 3)?;
         let attn_output = attn_weights.matmul(&v)?;
 
-        let attn_output =
-            attn_output
-                .transpose(1, 2)?
-                .reshape((b, seq_len, num_heads * head_dim))?
-                .contiguous()?;
+        let attn_output = attn_output
+            .transpose(1, 2)?
+            .reshape((b, seq_len, num_heads * head_dim))?
+            .contiguous()?;
         self.self_attn.o_proj.forward(&attn_output)
     }
 }
@@ -162,8 +161,11 @@ pub struct RALM {
 impl RALM {
     /// `num_layers` = `config.residual_lm_num_layers` (from VoxConfig, typically 8).
     pub fn load(
-        vb: &VarBuilder, cfg: &LmConfig, num_layers: usize,
-        dev: &Device, use_kv_cache: bool,
+        vb: &VarBuilder,
+        cfg: &LmConfig,
+        num_layers: usize,
+        dev: &Device,
+        use_kv_cache: bool,
     ) -> Result<Self> {
         let norm = RMSNorm::load(vb, cfg.hidden_size, cfg.rms_norm_eps, "norm")?;
         let mut layers = Vec::with_capacity(num_layers);

@@ -203,6 +203,8 @@ impl CloneTab {
                         latent_norm_scale: None,
                         ref_audio_path: Some(ref_path),
                         ref_transcript: transcript,
+                        prompt_audio_path: None,
+                        prompt_text: None,
                         clone_strength: self.similarity as f64,
                         metrics_output_path: Some(metrics_path_for_output(&self.output_path)),
                     };

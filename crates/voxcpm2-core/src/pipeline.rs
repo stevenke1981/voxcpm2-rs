@@ -51,10 +51,19 @@ pub struct SynthRequest {
     /// characteristics and prefixes them in the autoregressive loop.
     #[serde(default)]
     pub ref_audio_path: Option<PathBuf>,
-    /// Optional reference audio transcript (not yet used for alignment,
-    /// but reserved for future phoneme-based conditioning).
+    /// Optional transcript for the reference audio. This is currently kept
+    /// for metadata/roadmap parity; prompt continuation uses prompt_text.
     #[serde(default)]
     pub ref_transcript: Option<String>,
+    /// Optional continuation prompt audio. When present, its transcript is
+    /// prepended to target text and its encoded patches are appended after
+    /// the text/audio_start token sequence, matching official VoxCPM.
+    #[serde(default)]
+    pub prompt_audio_path: Option<PathBuf>,
+    /// Exact transcript of prompt_audio_path, required by the CLI when prompt
+    /// continuation is requested.
+    #[serde(default)]
+    pub prompt_text: Option<String>,
     /// Voice clone strength: 0.0 = no clone (text-only), 1.0 = full clone.
     /// Blends the reference audio feat_embeds with zeros.
     #[serde(default = "default_clone_strength")]
@@ -91,9 +100,17 @@ impl Default for SynthRequest {
             latent_norm_scale: None,
             ref_audio_path: None,
             ref_transcript: None,
+            prompt_audio_path: None,
+            prompt_text: None,
             clone_strength: 1.0,
             metrics_output_path: None,
         }
+    }
+}
+
+impl SynthRequest {
+    fn has_audio_conditioning(&self) -> bool {
+        self.ref_audio_path.is_some() || self.prompt_audio_path.is_some()
     }
 }
 
@@ -281,7 +298,7 @@ impl VoxPipeline {
                 .as_deref()
                 .unwrap_or_else(|| Path::new("models/VoxCPM2"));
             // Ensure model weights are cached before synthesis
-            let is_clone = req.ref_audio_path.is_some();
+            let is_clone = req.has_audio_conditioning();
             self.ensure_cache(model_dir, is_clone)?;
             let real = self.synthesize_real(req, model_dir, sample_rate, cancel)?;
             clone_reference_polish = real.clone_reference_polish;
@@ -344,7 +361,7 @@ impl VoxPipeline {
                     samples: result.samples,
                     device: result.device.clone(),
                     dry_run: result.dry_run,
-                    is_clone: req.ref_audio_path.is_some(),
+                    is_clone: req.has_audio_conditioning(),
                     label_ai_generated: req.label_ai_generated,
                     polish: polish_report,
                     clone_reference_polish,
@@ -398,7 +415,7 @@ impl VoxPipeline {
             &Device::Cpu
         };
         // Voice clone: use full audiovae tensors (encoder + decoder) from cache
-        let is_clone = req.ref_audio_path.is_some();
+        let is_clone = req.has_audio_conditioning();
         let audiovae_tensors = if is_clone {
             match &cache.audiovae_all_tensors {
                 Some(tensors) => tensors.clone(),
@@ -411,20 +428,31 @@ impl VoxPipeline {
         // ── Tokenizer (cached) ──
         let tokenizer = cache.tokenizer.clone();
         let target_text = build_voice_design_text(&req.text, req.voice_design.as_deref());
-        let tokens = tokenizer.encode_zero_shot(&target_text)?;
+        let target_token_count = tokenizer.encode(&target_text)?.len();
+        let token_text = build_prompt_target_text(req.prompt_text.as_deref(), &target_text);
+        let tokens = tokenizer.encode_zero_shot(&token_text)?;
         if tokens.is_empty() {
             anyhow::bail!("tokenizer returned empty tokens");
         }
 
-        // Voice clone: encode ref audio and build combined prefix
-        // (needs TSLM for embed_text, so defer AR preparation until after TSLM is loaded)
-        // We'll store the result here and use it during AR generation.
-        let mut clone_prefix: Option<RefPrefixResult> = None;
+        // Voice clone: encode reference/prompt audio and build Python-compatible
+        // prefix/continuation conditioning.
+        let mut clone_prefix: Option<ClonePrefixResult> = None;
         let mut clone_reference_polish = None;
         let mut clone_reference_trim = None;
 
-        let input_ids = if let Some(ref_path) = &req.ref_audio_path {
-            // Load TSLM first (needed for embed_text in encode_ref_prefix)
+        let input_ids = if is_clone {
+            if req.prompt_audio_path.is_some()
+                && req
+                    .prompt_text
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+            {
+                anyhow::bail!("prompt_text is required when prompt_audio_path is set");
+            }
+            // Load TSLM first (needed for embed_text in encode_clone_prefix)
             let mut tslm_clone = TSLM::load(&main_vb.pp("base_lm"), &config.lm_config, dev, false)?;
             // Use cached audiovae encoder tensors if available
             let encoder_tensors = if is_clone {
@@ -432,11 +460,12 @@ impl VoxPipeline {
             } else {
                 None
             };
-            let prefix = encode_ref_prefix(
+            let prefix = encode_clone_prefix(
                 model_dir,
                 config,
                 dev,
-                ref_path,
+                req.ref_audio_path.as_deref(),
+                req.prompt_audio_path.as_deref(),
                 &tokenizer,
                 &main_vb,
                 encoder_tensors,
@@ -444,14 +473,15 @@ impl VoxPipeline {
                 &tokens,
                 req.clone_strength,
             )?;
-            let n_patches = prefix.n_patches;
+            let n_reference_patches = prefix.n_reference_patches;
+            let n_prompt_patches = prefix.n_prompt_patches;
             let combined_seq_len = prefix.combined_ids.dim(1)?;
-            clone_reference_polish = Some(prefix.reference_polish);
+            clone_reference_polish = prefix.reference_polish.or(prefix.prompt_polish);
             clone_reference_trim = prefix.reference_trim;
             let combined_ids = prefix.combined_ids.clone();
             clone_prefix = Some(prefix);
             eprintln!(
-                "  [clone] ready: {n_patches} ref patches, combined_seq_len={combined_seq_len}"
+                "  [clone] ready: ref_patches={n_reference_patches} prompt_patches={n_prompt_patches} combined_seq_len={combined_seq_len}"
             );
             combined_ids
         } else {
@@ -538,9 +568,19 @@ impl VoxPipeline {
                 cancel,
                 &prefix.combined_embeds,
                 &prefix.feat_embeds,
+                prefix.initial_prev_feat.as_ref(),
+                target_token_count,
             )?
         } else {
-            generate_autoregressive(&main_vb, &ar_config, req, dev, &input_ids, cancel)?
+            generate_autoregressive(
+                &main_vb,
+                &ar_config,
+                req,
+                dev,
+                &input_ids,
+                cancel,
+                target_token_count,
+            )?
         };
         // latent shape: [1, feat_dim, seq_len]
         let latent_peak = latent
@@ -682,6 +722,46 @@ impl VoxPipeline {
     }
 }
 
+const AUDIO_VAE_FRAME_HOP_SAMPLES: usize = 640;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CloneAudioPadding {
+    Left,
+    Right,
+}
+
+struct EncodedCloneAudio {
+    patch_embeds: Vec<Tensor>,
+    n_patches: usize,
+    last_patch: Tensor,
+    polish: audio::AudioPolishReport,
+    trim: Option<audio::CloneReferenceTrimReport>,
+}
+
+/// Result of encoding clone conditioning audio for voice cloning.
+pub struct ClonePrefixResult {
+    /// Combined token IDs (ref + text + prompt audio): [1, T_total]
+    pub combined_ids: Tensor,
+    /// Combined embeddings (blended text_embed + feat_embed): [1, T_total, 2048]
+    pub combined_embeds: Tensor,
+    /// Feat_embed part (audio patches, zeros elsewhere): [1, T_total, 2048]
+    pub feat_embeds: Tensor,
+    /// Number of independent reference audio patches.
+    pub n_reference_patches: usize,
+    /// Number of continuation prompt audio patches.
+    pub n_prompt_patches: usize,
+    /// Number of text tokens, including the audio_start marker.
+    pub n_text_tokens: usize,
+    /// Last prompt latent patch used as the initial CFM condition.
+    pub initial_prev_feat: Option<Tensor>,
+    /// Audio cleanup metrics measured before AudioVAE reference encoding.
+    pub reference_polish: Option<audio::AudioPolishReport>,
+    /// Audio cleanup metrics measured before AudioVAE prompt encoding.
+    pub prompt_polish: Option<audio::AudioPolishReport>,
+    /// Optional trim diagnostics measured before AudioVAE reference encoding.
+    pub reference_trim: Option<audio::CloneReferenceTrimReport>,
+}
+
 /// Result of encoding a reference audio for voice cloning.
 pub struct RefPrefixResult {
     /// Combined token IDs (ref + text): [1, T_total]
@@ -696,6 +776,262 @@ pub struct RefPrefixResult {
     pub reference_polish: audio::AudioPolishReport,
     /// Optional trim diagnostics measured before AudioVAE reference encoding.
     pub reference_trim: Option<audio::CloneReferenceTrimReport>,
+}
+
+pub fn encode_clone_prefix(
+    model_dir: &Path,
+    config: &VoxConfig,
+    dev: &Device,
+    ref_audio_path: Option<&Path>,
+    prompt_audio_path: Option<&Path>,
+    tokenizer: &VoxTokenizer,
+    main_vb: &VarBuilder,
+    audiovae_encoder_tensors: Option<&HashMap<String, Tensor>>,
+    tslm: &mut TSLM,
+    text_ids: &[u32],
+    clone_strength: f64,
+) -> anyhow::Result<ClonePrefixResult> {
+    if ref_audio_path.is_none() && prompt_audio_path.is_none() {
+        anyhow::bail!("clone conditioning requires reference audio, prompt audio, or both");
+    }
+
+    let reference = match ref_audio_path {
+        Some(path) => Some(encode_clone_audio_conditioning(
+            model_dir,
+            config,
+            dev,
+            path,
+            main_vb,
+            audiovae_encoder_tensors,
+            CloneAudioPadding::Right,
+            clone_strength,
+            "reference",
+        )?),
+        None => None,
+    };
+    let prompt = match prompt_audio_path {
+        Some(path) => Some(encode_clone_audio_conditioning(
+            model_dir,
+            config,
+            dev,
+            path,
+            main_vb,
+            audiovae_encoder_tensors,
+            CloneAudioPadding::Left,
+            clone_strength,
+            "prompt",
+        )?),
+        None => None,
+    };
+
+    let special = tokenizer.special_tokens();
+    let audio_patch_token_id = 0u32;
+    let n_reference_patches = reference.as_ref().map(|r| r.n_patches).unwrap_or(0);
+    let n_prompt_patches = prompt.as_ref().map(|p| p.n_patches).unwrap_or(0);
+    let total_len = (if n_reference_patches > 0 {
+        n_reference_patches + 2
+    } else {
+        0
+    }) + text_ids.len()
+        + n_prompt_patches;
+
+    let mut combined_ids = Vec::with_capacity(total_len);
+    let one = Tensor::full(1.0f32, &[1, 1, 2048], dev)?;
+    let zero = Tensor::zeros(&[1, 1, 2048], DType::F32, dev)?;
+    let mut text_mask_parts: Vec<Tensor> = Vec::with_capacity(total_len);
+    let mut feat_embed_parts: Vec<Tensor> = Vec::with_capacity(total_len);
+
+    if let Some(reference) = &reference {
+        combined_ids.push(special.ref_audio_start);
+        text_mask_parts.push(one.clone());
+        feat_embed_parts.push(zero.clone());
+
+        for embed in &reference.patch_embeds {
+            combined_ids.push(audio_patch_token_id);
+            text_mask_parts.push(zero.clone());
+            feat_embed_parts.push(embed.clone());
+        }
+
+        combined_ids.push(special.ref_audio_end);
+        text_mask_parts.push(one.clone());
+        feat_embed_parts.push(zero.clone());
+    }
+
+    for &id in text_ids {
+        combined_ids.push(id);
+        text_mask_parts.push(one.clone());
+        feat_embed_parts.push(zero.clone());
+    }
+
+    if let Some(prompt) = &prompt {
+        for embed in &prompt.patch_embeds {
+            combined_ids.push(audio_patch_token_id);
+            text_mask_parts.push(zero.clone());
+            feat_embed_parts.push(embed.clone());
+        }
+    }
+
+    let text_mask = Tensor::cat(&text_mask_parts, 1)?;
+    let feat_embeds = Tensor::cat(&feat_embed_parts, 1)?;
+    let combined_ids_t =
+        Tensor::from_slice(&combined_ids, &[1, combined_ids.len()], dev)?.to_dtype(DType::I64)?;
+    let text_embed = tslm.embed_text(&combined_ids_t)?.to_dtype(DType::F32)?;
+    let audio_mask = (text_mask.ones_like()? - &text_mask)?;
+    let combined_embeds = (text_mask * text_embed)?.add(&(audio_mask * &feat_embeds)?)?;
+
+    eprintln!(
+        "  [clone] token sequence: ref_patches={n_reference_patches} text={} prompt_patches={n_prompt_patches} total={}",
+        text_ids.len(),
+        combined_ids.len()
+    );
+
+    let reference_polish = reference.as_ref().map(|r| r.polish);
+    let prompt_polish = prompt.as_ref().map(|p| p.polish);
+    let reference_trim = reference.as_ref().and_then(|r| r.trim);
+    let initial_prev_feat = prompt.as_ref().map(|p| p.last_patch.clone());
+
+    Ok(ClonePrefixResult {
+        combined_ids: combined_ids_t,
+        combined_embeds,
+        feat_embeds,
+        n_reference_patches,
+        n_prompt_patches,
+        n_text_tokens: text_ids.len(),
+        initial_prev_feat,
+        reference_polish,
+        prompt_polish,
+        reference_trim,
+    })
+}
+
+fn encode_clone_audio_conditioning(
+    model_dir: &Path,
+    config: &VoxConfig,
+    dev: &Device,
+    audio_path: &Path,
+    main_vb: &VarBuilder,
+    audiovae_encoder_tensors: Option<&HashMap<String, Tensor>>,
+    padding: CloneAudioPadding,
+    clone_strength: f64,
+    role: &str,
+) -> anyhow::Result<EncodedCloneAudio> {
+    let (samples, src_rate) = audio::load_wav_mono(audio_path)?;
+    eprintln!(
+        "  [clone] loaded {role} audio: {} samples at {} Hz",
+        samples.len(),
+        src_rate
+    );
+
+    let mut samples_16k = audio::resample(&samples, src_rate, 16000);
+    let polish = audio::polish_clone_reference_audio(&mut samples_16k, 16000);
+    eprintln!(
+        "  [clone] {role} polish: dc={:.6} peak_before={:.6} peak_after={:.6} quiet_rms={:.6}->{:.6} bg_gate={:.6} harsh_frames={}",
+        polish.dc_offset,
+        polish.peak_before,
+        polish.peak_after,
+        polish.quiet_rms_before,
+        polish.quiet_rms_after,
+        polish.background_gate_threshold,
+        polish.harsh_frames_smoothed
+    );
+
+    let trim = audio::trim_clone_reference_audio(&mut samples_16k, 16000);
+    if let Some(trim) = trim {
+        eprintln!(
+            "  [clone] trimming {role} {} samples ({:.2}s) -> {} samples ({:.2}s) to prevent OOM",
+            trim.original_samples,
+            trim.original_duration_sec,
+            trim.trimmed_samples,
+            trim.max_duration_sec,
+        );
+    }
+
+    pad_clone_audio_to_patch_multiple(&mut samples_16k, config.patch_size, padding);
+    let audio_t =
+        Tensor::from_slice(&samples_16k, &[1, 1, samples_16k.len()], dev)?.to_dtype(DType::F32)?;
+
+    let audiovae_tensors = match audiovae_encoder_tensors {
+        Some(full_tensors) => full_tensors
+            .iter()
+            .filter(|(k, _)| k.starts_with("encoder."))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        None => weights::load_audiovae_encoder_tensors(model_dir, dev)?,
+    };
+    let encoder = AudioVAE::load_encoder(&audiovae_tensors, &config.audio_vae_config)?;
+    let latent = encoder.encode(&audio_t)?;
+    let (_b, _c, t_total) = latent.dims3()?;
+    let patch_size = config.patch_size;
+    let n_patches = t_total / patch_size;
+    if n_patches == 0 {
+        anyhow::bail!(
+            "{role} audio too short: {t_total} latent frames, need at least {patch_size}"
+        );
+    }
+    const MAX_PATCHES: usize = 256;
+    let n_patches = n_patches.min(MAX_PATCHES);
+    eprintln!(
+        "  [clone] {role} AudioVAE encoder: latent [1, 64, {t_total}] -> {n_patches} patches of {patch_size}",
+    );
+
+    let enc_rope_factors: Option<Vec<f64>> = config
+        .lm_config
+        .rope_scaling
+        .as_ref()
+        .map(|rs| rs.short_factor.clone());
+    let mut feat_enc = LocEnc::load(
+        main_vb,
+        &config.encoder_config,
+        config.feat_dim,
+        patch_size,
+        enc_rope_factors.as_deref(),
+    )?;
+
+    let model_dtype = main_vb.dtype();
+    let mut patch_embeds: Vec<Tensor> = Vec::with_capacity(n_patches);
+    for i in 0..n_patches {
+        let patch = latent.narrow(2, i * patch_size, patch_size)?;
+        let patch = patch.to_dtype(model_dtype)?;
+        let mut embed = feat_enc.encode(&patch)?.to_dtype(DType::F32)?;
+        if clone_strength != 1.0 {
+            let scale = Tensor::full(clone_strength as f32, &[], dev)?;
+            embed = embed.mul(&scale)?;
+        }
+        patch_embeds.push(embed);
+    }
+    let last_patch = latent
+        .narrow(2, (n_patches - 1) * patch_size, patch_size)?
+        .to_dtype(model_dtype)?;
+
+    Ok(EncodedCloneAudio {
+        patch_embeds,
+        n_patches,
+        last_patch,
+        polish,
+        trim,
+    })
+}
+
+fn pad_clone_audio_to_patch_multiple(
+    samples: &mut Vec<f32>,
+    patch_size: usize,
+    padding: CloneAudioPadding,
+) {
+    let patch_samples = patch_size.max(1) * AUDIO_VAE_FRAME_HOP_SAMPLES;
+    let remainder = samples.len() % patch_samples;
+    if remainder == 0 {
+        return;
+    }
+    let padding_size = patch_samples - remainder;
+    match padding {
+        CloneAudioPadding::Right => samples.extend(std::iter::repeat(0.0).take(padding_size)),
+        CloneAudioPadding::Left => {
+            let mut padded = Vec::with_capacity(samples.len() + padding_size);
+            padded.extend(std::iter::repeat(0.0).take(padding_size));
+            padded.extend_from_slice(samples);
+            *samples = padded;
+        }
+    }
 }
 
 /// Encode a reference audio file and build the combined prefix for voice cloning.
@@ -847,13 +1183,13 @@ pub fn encode_ref_prefix(
 
     // ── 5. Build combined token IDs ──
     let special = tokenizer.special_tokens();
-    let pad_id = special.unk_token; // use <unk> as pad token for ref audio positions
+    let audio_patch_token_id = 0u32;
 
     let n_ref_tokens = 2 + n_patches; // ref_start + n_patches + ref_end
     let mut combined_ids = Vec::with_capacity(n_ref_tokens + text_ids.len());
     combined_ids.push(special.ref_audio_start);
     for _ in 0..n_patches {
-        combined_ids.push(pad_id);
+        combined_ids.push(audio_patch_token_id);
     }
     combined_ids.push(special.ref_audio_end);
     combined_ids.extend_from_slice(text_ids);
@@ -935,6 +1271,13 @@ fn build_voice_design_text(text: &str, voice_design: Option<&str>) -> String {
     }
 }
 
+fn build_prompt_target_text(prompt_text: Option<&str>, target_text: &str) -> String {
+    match prompt_text.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(prompt) => format!("{prompt}{target_text}"),
+        None => target_text.to_string(),
+    }
+}
+
 pub fn language_prompt_warning(text: &str, voice_design: Option<&str>) -> Option<&'static str> {
     let target_text = build_voice_design_text(text, voice_design);
     if looks_like_traditional_chinese_hint(&target_text) {
@@ -1007,6 +1350,35 @@ mod tests {
             build_voice_design_text("Hello", Some(" warm female voice ")),
             "(warm female voice)Hello"
         );
+    }
+
+    #[test]
+    fn prompt_target_text_matches_official_concat_order() {
+        assert_eq!(build_prompt_target_text(None, "target"), "target");
+        assert_eq!(build_prompt_target_text(Some(""), "target"), "target");
+        assert_eq!(
+            build_prompt_target_text(Some("prompt transcript "), "(warm)target"),
+            "prompt transcript(warm)target"
+        );
+    }
+
+    #[test]
+    fn clone_audio_padding_matches_python_modes() {
+        let patch = 4;
+        let patch_samples = patch * AUDIO_VAE_FRAME_HOP_SAMPLES;
+        let mut right = vec![1.0f32; patch_samples + 1];
+        pad_clone_audio_to_patch_multiple(&mut right, patch, CloneAudioPadding::Right);
+        assert_eq!(right.len(), patch_samples * 2);
+        assert_eq!(right[0], 1.0);
+        assert_eq!(right[patch_samples], 1.0);
+        assert_eq!(right[patch_samples + 1], 0.0);
+
+        let mut left = vec![1.0f32; patch_samples + 1];
+        pad_clone_audio_to_patch_multiple(&mut left, patch, CloneAudioPadding::Left);
+        assert_eq!(left.len(), patch_samples * 2);
+        assert_eq!(left[0], 0.0);
+        assert_eq!(left[patch_samples - 2], 0.0);
+        assert_eq!(left[patch_samples - 1], 1.0);
     }
 
     #[test]

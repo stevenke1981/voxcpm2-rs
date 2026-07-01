@@ -56,7 +56,13 @@ impl TslmLayer {
         })
     }
 
-    pub fn forward(&mut self, x: &Tensor, rope: &RoPE, step: usize, causal: bool) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        x: &Tensor,
+        rope: &RoPE,
+        step: usize,
+        causal: bool,
+    ) -> Result<Tensor> {
         // Pre-attention norm
         let residual = x;
         let h = self.input_layernorm.forward(x)?;
@@ -96,11 +102,8 @@ impl TSLM {
             dev,
         )?;
 
-        let embed_tokens = candle_nn::embedding(
-            cfg.vocab_size,
-            cfg.hidden_size,
-            vb.pp("embed_tokens"),
-        )?;
+        let embed_tokens =
+            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
         let norm = RMSNorm::load(vb, cfg.hidden_size, cfg.rms_norm_eps, "norm")?;
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -117,10 +120,18 @@ impl TSLM {
 
         // Python: scale_emb is only applied when use_mup=True
         //   `if not getattr(self.config.lm_config, "use_mup", False): scale_emb = 1.0`
-        let scale_emb = if cfg.use_mup { cfg.scale_emb.unwrap_or(1.0) } else { 1.0 };
+        let scale_emb = if cfg.use_mup {
+            cfg.scale_emb.unwrap_or(1.0)
+        } else {
+            1.0
+        };
         // Python applies scale_depth per-layer only when use_mup=True.
         // When use_mup=False (our case), scale_depth is not used at all.
-        let scale_depth = if cfg.use_mup { cfg.scale_depth.unwrap_or(1.0) } else { 1.0 };
+        let scale_depth = if cfg.use_mup {
+            cfg.scale_depth.unwrap_or(1.0)
+        } else {
+            1.0
+        };
 
         Ok(Self {
             embed_tokens,

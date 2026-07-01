@@ -29,7 +29,8 @@ pub struct FsqLayer {
 impl FsqLayer {
     pub fn load(vb: &VarBuilder) -> Result<Self> {
         let in_proj = candle_nn::linear_no_bias(2048, FSQ_LATENT_DIM, vb.pp("fsq_layer.in_proj"))?;
-        let out_proj = candle_nn::linear_no_bias(FSQ_LATENT_DIM, 2048, vb.pp("fsq_layer.out_proj"))?;
+        let out_proj =
+            candle_nn::linear_no_bias(FSQ_LATENT_DIM, 2048, vb.pp("fsq_layer.out_proj"))?;
         Ok(Self {
             in_proj,
             out_proj,
@@ -54,17 +55,17 @@ impl FsqLayer {
         let dtype = x.dtype();
         // Project to latent dim
         let h = self.in_proj.forward(x)?; // [B, T, latent_dim], same dtype as x
-        // Python: torch.tanh(h) first, THEN round(x * scale) / scale
-        // tanh clips to [-1, 1] before quantization (matching Python).
+                                          // Python: torch.tanh(h) first, THEN round(x * scale) / scale
+                                          // tanh clips to [-1, 1] before quantization (matching Python).
         let h = h.tanh()?;
         // Scalar quantization: round to nearest discrete level
         let scale_t = make_tensor_like(self.scale as f32, &[1], dtype, dev)?;
-        let h_q = h.broadcast_mul(&scale_t)?;   // x * 9
-        // Round via: floor(x + 0.5) — Python's torch.round behavior
+        let h_q = h.broadcast_mul(&scale_t)?; // x * 9
+                                              // Round via: floor(x + 0.5) — Python's torch.round behavior
         let half = make_tensor_like(0.5f32, &[self.latent_dim], dtype, dev)?;
         let h_q = h_q.broadcast_add(&half)?.floor()?; // round(x * 9)
-        let h_q = h_q.broadcast_div(&scale_t)?;        // / 9
-        // Project back to hidden dim
+        let h_q = h_q.broadcast_div(&scale_t)?; // / 9
+                                                // Project back to hidden dim
         self.out_proj.forward(&h_q)
     }
 }

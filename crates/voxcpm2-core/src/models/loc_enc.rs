@@ -116,14 +116,12 @@ impl LocEnc {
             });
         }
         let encoder_norm = RMSNorm::load(vb, cfg.hidden_dim, 1e-5, "feat_encoder.encoder.norm")?;
-        let in_proj =
-            candle_nn::linear(feat_dim, cfg.hidden_dim, vb.pp("feat_encoder.in_proj"))?;
+        let in_proj = candle_nn::linear(feat_dim, cfg.hidden_dim, vb.pp("feat_encoder.in_proj"))?;
         // special_token: [1, 1, 1, hidden_dim] → squeeze down to [1, 1, hidden_dim]
         let special_token_4d = vb.get(&[1, 1, 1, cfg.hidden_dim], "feat_encoder.special_token")?;
         let special_token = special_token_4d.squeeze(2)?; // [1, 1, hidden_dim]
 
-        let enc_to_lm_proj =
-            candle_nn::linear(cfg.hidden_dim, 2048, vb.pp("enc_to_lm_proj"))?; // has bias in safetensors
+        let enc_to_lm_proj = candle_nn::linear(cfg.hidden_dim, 2048, vb.pp("enc_to_lm_proj"))?; // has bias in safetensors
 
         // RoPE for encoder (use short_factor from lm_config, same as DiT decoder)
         let rope = RoPE::new(8192, cfg.kv_channels, 10000.0, rope_factors, dev)?;
@@ -154,8 +152,8 @@ impl LocEnc {
     /// - 取**第一個位置**（special token position 0）→ `[B, 1, hidden]`
     /// - `enc_to_lm_proj` → `[B, 1, 2048]`
     pub fn encode(&mut self, acoustic_features: &Tensor) -> Result<Tensor> {
-        let x = acoustic_features.transpose(1, 2)?;    // [B, C, T] → [B, T, C]
-        let x = self.in_proj.forward(&x)?;               // [B, T, hidden]
+        let x = acoustic_features.transpose(1, 2)?; // [B, C, T] → [B, T, C]
+        let x = self.in_proj.forward(&x)?; // [B, T, hidden]
         let batch = x.dim(0)?;
         // Python: special_token is [1, 1, 1, hidden] → expand to [B, T=1, 1, hidden]
         // Then cat([special, x], dim=2) → [B, 1, 1+P, hidden]
@@ -164,22 +162,22 @@ impl LocEnc {
         let special = self.special_token.expand(&[batch, 1, self.hidden_dim])?;
         // !!! CRITICAL: place special FIRST (position 0), THEN features (positions 1..P)
         // to match Python's ordering and RoPE positions.
-        let x = Tensor::cat(&[&special, &x], 1)?;        // [B, 1+P, hidden]
+        let x = Tensor::cat(&[&special, &x], 1)?; // [B, 1+P, hidden]
         let mut h = x;
         for layer in self.encoder.iter_mut() {
             h = layer.forward(&h, &self.rope, 0)?;
         }
         h = self.encoder_norm.forward(&h)?;
         // Python: cls_output = outputs[:, 0, :] → take position 0 (special token)
-        let h = h.narrow(1, 0, 1)?;                      // [B, 1, hidden]
-        self.enc_to_lm_proj.forward(&h)                   // [B, 1, 2048]
+        let h = h.narrow(1, 0, 1)?; // [B, 1, hidden]
+        self.enc_to_lm_proj.forward(&h) // [B, 1, 2048]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{Device, DType};
+    use candle_core::{DType, Device};
 
     #[test]
     fn locenc_shape_test() -> Result<()> {

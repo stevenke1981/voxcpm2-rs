@@ -158,11 +158,76 @@ CLI language-risk smoke：
 - left padding for prompt continuation。
 - combined mode queue order: reference patches then prompt patches。
 
+快速單元 gate：
+
+```powershell
+.\run_with_vs.cmd cargo test -p voxcpm2-core clone_audio_padding_matches_python_modes --features cpu
+.\run_with_vs.cmd cargo test -p voxcpm2-core prompt_target_text_matches_official_concat_order --features cpu
+.\run_with_vs.cmd cargo test -p voxcpm2-cli clone_audio_input_requires --features cpu
+```
+
 通過條件：
 
 - combined token ids 長度、ref start/end 位置、text/audio mask 與 fixture 一致。
+- audio patch placeholder token id 必須為 `0`，對齊官方 Python/C++，不能用 tokenizer `unk_token`。
 - patch count 與 `patch_size = 4` 對齊。
 - `clone_strength = 0.0` 接近 text-only，`clone_strength = 1.0` 使用完整 feat embed。
+- CLI clone 未提供 `--ref-audio` 或 `--prompt-audio` 時必須失敗。
+- CLI clone 使用 `--prompt-audio` 時必須要求 `--prompt-text`。
+
+## G4b - Prompt/combined clone model gate
+
+此 gate 對齊 OpenBMB Python `_generate()` 與 `voxcpm-cpp` clone flow：
+
+- reference-only：`ref_audio_start + ref patches + ref_audio_end + target_text/audio_start`。
+- prompt-only continuation：`prompt_text + target_text + audio_start + prompt patches`。
+- combined：`ref prefix + prompt_text + target_text + audio_start + prompt patches`。
+
+prompt-only 真實模型 smoke：
+
+```powershell
+.\run_with_vs.cmd cargo run -p voxcpm2-cli -- clone `
+  --model-dir models\VoxCPM2 `
+  --prompt-audio fixtures\clone\prompt.wav `
+  --prompt-text "这是提示音频的准确文字。" `
+  --text "这是接续生成的普通话测试。" `
+  --i-have-consent `
+  --out output\clone_prompt_only_seed102.wav `
+  --metrics-out output\clone_prompt_only_seed102.metrics.json `
+  --steps 30 --seed 102 --device cuda
+```
+
+combined 真實模型 smoke：
+
+```powershell
+.\run_with_vs.cmd cargo run -p voxcpm2-cli -- clone `
+  --model-dir models\VoxCPM2 `
+  --ref-audio fixtures\clone\clean_ref.wav `
+  --prompt-audio fixtures\clone\prompt.wav `
+  --prompt-text "这是提示音频的准确文字。" `
+  --text "这是结合参考音色与提示音频的普通话测试。" `
+  --i-have-consent `
+  --out output\clone_combined_seed102.wav `
+  --metrics-out output\clone_combined_seed102.metrics.json `
+  --steps 30 --seed 102 --device cuda
+```
+
+通過條件：
+
+- stderr 顯示 reference 使用 right padding、prompt 使用 left padding，且 prompt patches > 0。
+- stderr 顯示 `max_len_base` 來自 target text token 長度，而不是 combined sequence 長度。
+- prompt-only/combined 輸出皆 finite、non-empty、peak <= 0.95。
+- ASR transcript 與 `--text` 高度一致，且不被 `--prompt-text` 的文字覆蓋或重複。
+- high-ZCR、quiet RMS、peak 不比 reference-only accepted baseline 明顯退化。
+- combined mode 的 `clone_reference_polish` 仍顯示 reference 前處理生效。
+
+本輪 evidence：
+
+- `output/alignment_synth_short_seed102.wav`：ASR transcript 為「这是普通话测试 / 声音清楚自然」。
+- `output/alignment_prompt_only_seed102.wav`：prompt-only continuation 可產生 CUDA clone audio，
+  但 ASR 仍有字詞偏移，尚未通過完整相似度 gate。
+- `output/alignment_combined_seed102_v2.wav`：combined mode 會產生 CUDA audio，且 `max_len_base=30`
+  不再受 273-token combined seq_len 放大；faster-whisper CUDA 對該檔仍 crash，列為 ASR blocker。
 
 ## G5 - Backend/performance matrix
 

@@ -15,7 +15,8 @@ fn save_tensor(t: &Tensor, prefix: &str) -> Result<()> {
     let flat = t.flatten_all()?.to_vec1::<f32>()?;
     let path = format!("{prefix}.f32");
     let bytes: Vec<u8> = flat.iter().flat_map(|v| v.to_le_bytes()).collect();
-    std::fs::write(&path, &bytes).map_err(|e| candle_core::Error::Msg(format!("save_tensor({prefix}): {e}")))
+    std::fs::write(&path, &bytes)
+        .map_err(|e| candle_core::Error::Msg(format!("save_tensor({prefix}): {e}")))
 }
 
 // ⚠ FlowMatchingScheduler will move to scheduler.rs after Z7 refactor
@@ -23,8 +24,8 @@ pub use self::scheduler::FlowMatchingScheduler;
 
 mod scheduler {
     //! Flow Matching scheduler (temporary home — will be its own module).
-    use candle_core::{Result, Tensor};
     use crate::config::CfmConfig;
+    use candle_core::{Result, Tensor};
 
     pub struct FlowMatchingScheduler {
         pub sigma_min: f64,
@@ -54,7 +55,9 @@ mod scheduler {
                     }
                     ts
                 }
-                _ => (0..=num_steps).map(|i| i as f64 / num_steps as f64).collect(),
+                _ => (0..=num_steps)
+                    .map(|i| i as f64 / num_steps as f64)
+                    .collect(),
             }
         }
 
@@ -163,10 +166,26 @@ impl LocDiT {
         let cond_proj = candle_nn::linear(feat_dim, cfg.hidden_dim, vb.pp("estimator.cond_proj"))?;
         let in_proj = candle_nn::linear(feat_dim, cfg.hidden_dim, vb.pp("estimator.in_proj"))?;
         let out_proj = candle_nn::linear(cfg.hidden_dim, feat_dim, vb.pp("estimator.out_proj"))?;
-        let time_mlp_1 = candle_nn::linear(cfg.hidden_dim, cfg.hidden_dim, vb.pp("estimator.time_mlp.linear_1"))?;
-        let time_mlp_2 = candle_nn::linear(cfg.hidden_dim, cfg.hidden_dim, vb.pp("estimator.time_mlp.linear_2"))?;
-        let delta_time_mlp_1 = candle_nn::linear(cfg.hidden_dim, cfg.hidden_dim, vb.pp("estimator.delta_time_mlp.linear_1"))?;
-        let delta_time_mlp_2 = candle_nn::linear(cfg.hidden_dim, cfg.hidden_dim, vb.pp("estimator.delta_time_mlp.linear_2"))?;
+        let time_mlp_1 = candle_nn::linear(
+            cfg.hidden_dim,
+            cfg.hidden_dim,
+            vb.pp("estimator.time_mlp.linear_1"),
+        )?;
+        let time_mlp_2 = candle_nn::linear(
+            cfg.hidden_dim,
+            cfg.hidden_dim,
+            vb.pp("estimator.time_mlp.linear_2"),
+        )?;
+        let delta_time_mlp_1 = candle_nn::linear(
+            cfg.hidden_dim,
+            cfg.hidden_dim,
+            vb.pp("estimator.delta_time_mlp.linear_1"),
+        )?;
+        let delta_time_mlp_2 = candle_nn::linear(
+            cfg.hidden_dim,
+            cfg.hidden_dim,
+            vb.pp("estimator.delta_time_mlp.linear_2"),
+        )?;
         // Use short_factor from lm_config (Python: decoder_config = lm_config.model_copy(deep=True))
         // For sequences shorter than original_max_position_embeddings (which is 32768 and our DiT
         // sequences are at most ~40 tokens), short_factor is used.
@@ -215,7 +234,11 @@ impl LocDiT {
         // Convert all inputs to match weight dtype if needed.
         let model_dtype = self.in_proj.weight().dtype();
         let to_model = |t: &Tensor| -> Result<Tensor> {
-            if t.dtype() != model_dtype { t.to_dtype(model_dtype) } else { Ok(t.clone()) }
+            if t.dtype() != model_dtype {
+                t.to_dtype(model_dtype)
+            } else {
+                Ok(t.clone())
+            }
         };
         let x_cvt = to_model(x)?;
         let mu_cvt = to_model(mu)?;
@@ -238,9 +261,9 @@ impl LocDiT {
         }; // [B, T', hidden]
 
         // 3–4. Time embedding: sin/cos → MLP
-        let t_emb = self.time_embed_mlp(&t_cvt, dev, model_dtype)?;   // [B, hidden]
+        let t_emb = self.time_embed_mlp(&t_cvt, dev, model_dtype)?; // [B, hidden]
         let dt_emb = self.time_embed_mlp(&dt_cvt, dev, model_dtype)?; // [B, hidden]
-        let t_combined = (t_emb + dt_emb)?;                 // [B, hidden]
+        let t_combined = (t_emb + dt_emb)?; // [B, hidden]
 
         // 5. mu: [B, 2*hidden] → [B, 2, hidden] (Python: mu.view(B, -1, hidden))
         let h_mu = mu_cvt.reshape((batch, 2, self.hidden_dim))?; // [B, 2, hidden]
@@ -268,7 +291,7 @@ impl LocDiT {
         //    total = 2(mu) + 1(t) + T'(cond) + T(x)
         //    start_idx = 2 + 1 + T'
         let cond_len = cond_cvt.dim(2)?; // T'
-        let x_len = x_cvt.dim(2)?;       // T
+        let x_len = x_cvt.dim(2)?; // T
         let start_idx = 2 + 1 + cond_len;
         // Debug: save decoder output for cond vs uncond comparison
         if h.dim(0)? > 1 {
@@ -396,8 +419,11 @@ mod tests {
         let dt = Tensor::full(0.1f32, &[batch], &dev)?;
 
         let out = dit.forward(&x, &mu, &t, &cond, &dt)?;
-        assert_eq!(out.dims(), &[batch, feat_dim, patch_size],
-            "LocDiT forward output shape");
+        assert_eq!(
+            out.dims(),
+            &[batch, feat_dim, patch_size],
+            "LocDiT forward output shape"
+        );
         Ok(())
     }
 }

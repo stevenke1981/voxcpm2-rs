@@ -46,6 +46,18 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 - Targeted CUDA + ASR sweep 已跑 seed 102、cfg 2.3/2.5、latent default/0.7875、uniform scheduler，
   Mandarin short 與 midburst 兩句皆 ASR similarity=1.0 且 required terms 通過；目前最佳候選是
   `seed102_cfg2p5_lndefault_uniform`，但尚未含 clone/full prompt matrix，因此先不取代 accepted baseline。
+- 已對齊官方 Python `OpenBMB/VoxCPM@b9fbaec` 與 C++ `voxcpm-cpp@896f595` 的 clone/語音生成
+  序列基礎：CLI 支援 reference-only、prompt-only continuation、reference+prompt combined；
+  pipeline 依官方順序組出 ref prefix、`prompt_text + target_text + audio_start`、prompt patches，
+  並用 prompt 最後一個 latent patch 初始化 CFM condition。
+- 追蹤官方最新 `OpenBMB/VoxCPM@07c937b` 後，補齊兩個細節：audio patch placeholder token
+  改為官方/C++ 使用的 `0`；autoregressive `max_len` 改用 target text token 長度，而不是
+  combined sequence 長度，避免 reference/prompt patches 放大生成時間。
+- 已產生 CUDA 測試語音：
+  `output/alignment_synth_short_seed102.wav`、`output/alignment_synth_seed102.wav`、
+  `output/alignment_prompt_only_seed102.wav`、`output/alignment_combined_seed102_v2.wav`。
+  短句 synth 經 faster-whisper large-v3-turbo CUDA ASR 通過主要文字：
+  「这是普通话测试 / 声音清楚自然」。
 
 ## 最終完成定義
 
@@ -76,6 +88,7 @@ Rust/Candle 版本已經具備真實語音生成與 voice clone 的核心能力�
 
 ## 下一個 commit 建議
 
-下一個實作 commit 建議只做一件事：把 `seed102_cfg2p5_lndefault_uniform` 放進完整 CUDA + ASR
-matrix，補 clone case 與 fricatives case；若 full sweep 仍勝過既有 seed 102 baseline，再更新
-accepted baseline，否則轉向 clone sequence/token mask parity fixture。
+下一個實作 commit 建議只做一件事：改善 prompt-only/combined clone 的 ASR 細節失真與 stop
+head 穩定性。prompt-only 目前可辨識主要語意但字詞仍偏移；combined 已被 target-length cap
+限制到 30.4 秒，但 faster-whisper 對該輸出仍會 CUDA/Python crash，需要先切出短窗或替換
+GPU ASR engine 再做完整判讀。

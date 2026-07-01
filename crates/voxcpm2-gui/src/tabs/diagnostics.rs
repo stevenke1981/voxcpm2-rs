@@ -16,7 +16,11 @@ impl DiagnosticsTab {
             ui.label("Configured device:");
             ui.colored_label(
                 egui::Color32::YELLOW,
-                if device_str.is_empty() { "auto" } else { device_str },
+                if device_str.is_empty() {
+                    "auto"
+                } else {
+                    device_str
+                },
             );
         });
         if let Ok(info) = probe_device(device_str) {

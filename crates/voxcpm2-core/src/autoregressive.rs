@@ -64,8 +64,20 @@ pub fn generate_autoregressive(
     dev: &Device,
     input_ids: &Tensor,
     cancel: Option<&AtomicBool>,
+    max_len_base_tokens: usize,
 ) -> anyhow::Result<Tensor> {
-    generate_autoregressive_with(main_vb, config, req, dev, input_ids, cancel, None, None)
+    generate_autoregressive_with(
+        main_vb,
+        config,
+        req,
+        dev,
+        input_ids,
+        cancel,
+        None,
+        None,
+        None,
+        Some(max_len_base_tokens),
+    )
 }
 
 /// 語音克隆專用：使用預先計算好的 combined embeddings + feat embeddings 進行自回歸生成。
@@ -78,6 +90,8 @@ pub fn generate_autoregressive_clone(
     cancel: Option<&AtomicBool>,
     init_combined_embeds: &Tensor,
     init_feat_embeds: &Tensor,
+    init_prev_feat: Option<&Tensor>,
+    max_len_base_tokens: usize,
 ) -> anyhow::Result<Tensor> {
     generate_autoregressive_with(
         main_vb,
@@ -88,6 +102,8 @@ pub fn generate_autoregressive_clone(
         cancel,
         Some(init_combined_embeds),
         Some(init_feat_embeds),
+        init_prev_feat,
+        Some(max_len_base_tokens),
     )
 }
 
@@ -100,6 +116,8 @@ fn generate_autoregressive_with(
     cancel: Option<&AtomicBool>,
     init_combined_embeds: Option<&Tensor>,
     init_feat_embeds: Option<&Tensor>,
+    init_prev_feat: Option<&Tensor>,
+    max_len_base_tokens: Option<usize>,
 ) -> anyhow::Result<Tensor> {
     let check_cancel = |name: &str| -> anyhow::Result<()> {
         if let Some(flag) = cancel {
@@ -119,8 +137,11 @@ fn generate_autoregressive_with(
     // where retry_badcase_ratio_threshold = 6 (Python default), global_max = req.max_autoregressive_steps or 2000
     let global_max = req.max_autoregressive_steps.unwrap_or(2000);
     let seq_len = input_ids.dim(1)?;
-    let max_len = std::cmp::min(seq_len * 6 + 10, global_max);
-    eprintln!("  [autoregressive] seq_len={seq_len} max_len={max_len} (global_max={global_max})");
+    let max_len_base = max_len_base_tokens.unwrap_or(seq_len);
+    let max_len = std::cmp::min(max_len_base * 6 + 10, global_max);
+    eprintln!(
+        "  [autoregressive] seq_len={seq_len} max_len_base={max_len_base} max_len={max_len} (global_max={global_max})"
+    );
 
     // ── 載入 KV cache 版本的 TSLM ──
     let mut tslm_kv = TSLM::load(&main_vb.pp("base_lm"), &config.lm_config, dev, true)?;
@@ -238,7 +259,11 @@ fn generate_autoregressive_with(
 
     // ── 自回歸迴圈 ──
     let mut all_feats: Vec<Tensor> = Vec::new();
-    let mut prev_feat: Option<Tensor> = None;
+    let mut prev_feat: Option<Tensor> = match init_prev_feat {
+        Some(feat) if feat.dtype() != cfm.target_dtype => Some(feat.to_dtype(cfm.target_dtype)?),
+        Some(feat) => Some(feat.clone()),
+        None => None,
+    };
     let min_steps = 2;
     let n_timesteps = req.inference_timesteps;
     let cfg_value = req.cfg_value;

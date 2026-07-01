@@ -120,7 +120,13 @@ impl GQAAttention {
     ///   - TSLM initial forward: causal=true (full sequence at once)
     ///   - TSLM forward_step: causal=false (only 1 new token, KV cache handles causality)
     ///   - DiT forward: causal=false (bidirectional)
-    pub fn forward(&mut self, x: &Tensor, rope: &RoPE, step: usize, causal: bool) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        x: &Tensor,
+        rope: &RoPE,
+        step: usize,
+        causal: bool,
+    ) -> Result<Tensor> {
         let (b, seq_len, _) = x.shape().dims3()?;
 
         // Projections
@@ -200,11 +206,10 @@ impl GQAAttention {
 
         // Transpose back and reshape
         // Contiguous required for o_proj matmul on CUDA
-        let attn_output =
-            attn_output
-                .transpose(1, 2)?
-                .reshape((b, seq_len, self.num_heads * self.head_dim))?
-                .contiguous()?;
+        let attn_output = attn_output
+            .transpose(1, 2)?
+            .reshape((b, seq_len, self.num_heads * self.head_dim))?
+            .contiguous()?;
 
         // Output projection
         self.o_proj.forward(&attn_output)

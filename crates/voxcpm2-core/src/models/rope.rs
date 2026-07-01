@@ -45,7 +45,7 @@ impl RoPE {
                 "LongRoPE factor length must equal head_dim/2"
             );
             for (f, factor) in inv_freq.iter_mut().zip(factors) {
-                *f /= factor;  // INV factor to match Python convention
+                *f /= factor; // INV factor to match Python convention
             }
         }
 
