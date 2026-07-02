@@ -86,7 +86,11 @@ impl CloneTab {
 
     fn can_generate(&self) -> bool {
         let has_conditioning = self.has_reference_audio() || self.has_prompt_audio();
-        let prompt_ok = if self.has_prompt_audio() { self.has_prompt_transcript() } else { true };
+        let prompt_ok = if self.has_prompt_audio() {
+            self.has_prompt_transcript()
+        } else {
+            true
+        };
         has_conditioning && self.has_synthesis_text() && self.has_voice_consent && prompt_ok
     }
 
