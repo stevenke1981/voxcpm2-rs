@@ -93,13 +93,16 @@ All 23 non-ignored unit tests pass on CPU.
 
 ### G7: egui GUI
 
-**Status: ✅ PASS** (scaffold + tabs)
+**Status: ✅ PASS** (scaffold + tabs + prompt/combined clone UI)
 - Model tab: directory browser, device selector, inspect ✓
 - Synthesis tab: text input, CFG, steps, seed, dry-run ✓
 - Output tab: waveform, rodio playback, WAV export ✓
 - Diagnostics tab: device info, VRAM estimate, event log ✓
 - Cancel generation ✓
-- Cloning tab: Full backend integration (encoder + decoder + clone prefill + parameters) ✓
+- Cloning tab: Full backend integration + **Prompt audio + Prompt text fields** for prompt-only and combined (ref + prompt) modes ✓
+- Consent gate enforced for any reference/prompt usage ✓
+
+**2026-07-02 更新**：CloneTab 已完整支援三種 clone 模式（ref-only / prompt-only / combined），並更新 can_generate 與請求建構邏輯。單元測試擴充涵蓋 prompt 情境。
 
 ### G8: GPU benchmark
 
@@ -121,6 +124,37 @@ All 23 non-ignored unit tests pass on CPU.
 # NVCC_CCBIN is auto-configured via .cargo/config.toml
 cargo build --features cuda
 ```
+
+### Prompt-only + Combined Clone CUDA + ASR Gate（2026-07-02 實作完成）
+
+**Status: ✅ STRUCTURAL + METRICS GATE 完成（ASR 層可透過 -RunAsr 觸發）**
+
+- GUI Clone 分頁新增 prompt_audio + prompt_text 控制項，支援：
+  - Reference-only（原有）
+  - Prompt-only continuation
+  - Combined（ref + prompt） ultimate cloning
+- `harness/audio_quality_gate.ps1` 新增 `-PromptAudio` `-PromptText` 參數，會自動執行：
+  - ref-only clone gate
+  - prompt-only clone gate
+  - combined clone gate
+  - 每個模式皆產生獨立 WAV + *.metrics.json，並通過 Assert-Metrics（is_clone、polish、clone_reference_polish 等）
+- 與 `write_acceptance_baseline.ps1 -RunAsr` 及 `quality_sweep.ps1 -RunAsr` 相容，可對 prompt/combined 案例執行 faster-whisper ASR + required-terms 檢查。
+- Pipeline / CLI 原本即完整支援 prompt 與 combined，現在 GUI + harness 也補齊，形成「完整 CUDA + ASR gate」。
+
+**使用方式（示例）**：
+```powershell
+./harness/audio_quality_gate.ps1 -Device cuda -Steps 30 -Seed 99 `
+  -RefAudio path\to\clean_ref.wav `
+  -PromptAudio path\to\clean_prompt.wav `
+  -PromptText "這是提示音訊的準確文字。"
+```
+（可搭配 `-RunAsr` 在 write_acceptance_baseline 中使用完整 ASR 驗證。）
+
+**驗證重點**：
+- 所有 clone 模式皆強制要求 --i-have-consent 與 GUI consent
+- 輸出 metrics 包含 clone_reference_polish / prompt_polish
+- ASR 時可為接續內容設定適當 required_terms（例如包含提示中的關鍵詞）
+
 
 ### 效能改善：Model Weight Caching
 

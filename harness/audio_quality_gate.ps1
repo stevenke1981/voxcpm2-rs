@@ -4,6 +4,8 @@ param(
   [string]$OutDir = "output/quality-gate",
   [string]$PromptSet = "tests/golden/mandarin_regression_prompts.json",
   [string]$RefAudio = "",
+  [string]$PromptAudio = "",
+  [string]$PromptText = "",
   [int]$Steps = 30,
   [int]$Seed = 99,
   [double]$FrameMs = 20.0,
@@ -227,28 +229,86 @@ foreach ($case in $promptSpec.cases) {
 }
 
 if (-not $SkipClone) {
-  if ([string]::IsNullOrWhiteSpace($RefAudio)) {
-    Write-Host "Clone gate skipped: pass -RefAudio or use -SkipClone." -ForegroundColor Yellow
+  $hasRef = -not [string]::IsNullOrWhiteSpace($RefAudio)
+  $hasPrompt = (-not [string]::IsNullOrWhiteSpace($PromptAudio)) -and (-not [string]::IsNullOrWhiteSpace($PromptText))
+
+  if (-not $hasRef -and -not $hasPrompt) {
+    Write-Host "Clone gate skipped: pass -RefAudio and/or (-PromptAudio + -PromptText) or use -SkipClone." -ForegroundColor Yellow
   } else {
-    $cloneWav = Join-Path $outRoot.FullName "clone_noisy_ref_seed99.wav"
-    $cloneMetrics = Join-Path $outRoot.FullName "clone_noisy_ref_seed99.metrics.json"
-    $cloneArgs = @(
-      "run", "-p", "voxcpm2-cli"
-    ) + $featureArgs + @(
-      "--", "clone",
-      "--model-dir", $ModelDir,
-      "--device", $Device,
-      "--ref-audio", $RefAudio,
-      "--text", "这是声音复制的噪声回归测试。",
-      "--i-have-consent",
-      "--out", $cloneWav,
-      "--metrics-out", $cloneMetrics,
-      "--steps", "$Steps",
-      "--seed", "$Seed"
-    )
-    if ($DryRun) { $cloneArgs += "--dry-run" }
-    Invoke-Checked -CargoArgs $cloneArgs
-    Assert-Metrics -MetricsPath $cloneMetrics -WavPath $cloneWav -ExpectedClone $true -ExpectedDryRun ([bool]$DryRun)
+    # 1. Reference-only (existing)
+    if ($hasRef) {
+      $cloneWav = Join-Path $outRoot.FullName "clone_ref_only_seed99.wav"
+      $cloneMetrics = Join-Path $outRoot.FullName "clone_ref_only_seed99.metrics.json"
+      $cloneArgs = @(
+        "run", "-p", "voxcpm2-cli"
+      ) + $featureArgs + @(
+        "--", "clone",
+        "--model-dir", $ModelDir,
+        "--device", $Device,
+        "--ref-audio", $RefAudio,
+        "--text", "这是参考音色克隆测试，使用 reference-only 模式。",
+        "--i-have-consent",
+        "--out", $cloneWav,
+        "--metrics-out", $cloneMetrics,
+        "--steps", "$Steps",
+        "--seed", "$Seed"
+      )
+      if ($DryRun) { $cloneArgs += "--dry-run" }
+      Invoke-Checked -CargoArgs $cloneArgs
+      Assert-Metrics -MetricsPath $cloneMetrics -WavPath $cloneWav -ExpectedClone $true -ExpectedDryRun ([bool]$DryRun)
+      Write-Host "  [gate] ref-only clone gate passed structural checks." -ForegroundColor Green
+    }
+
+    # 2. Prompt-only continuation (new for gate)
+    if ($hasPrompt) {
+      $cloneWav = Join-Path $outRoot.FullName "clone_prompt_only_seed99.wav"
+      $cloneMetrics = Join-Path $outRoot.FullName "clone_prompt_only_seed99.metrics.json"
+      $cloneArgs = @(
+        "run", "-p", "voxcpm2-cli"
+      ) + $featureArgs + @(
+        "--", "clone",
+        "--model-dir", $ModelDir,
+        "--device", $Device,
+        "--prompt-audio", $PromptAudio,
+        "--prompt-text", $PromptText,
+        "--text", "这是提示音频接续生成测试，请确认内容与提示一致。",
+        "--i-have-consent",
+        "--out", $cloneWav,
+        "--metrics-out", $cloneMetrics,
+        "--steps", "$Steps",
+        "--seed", "$Seed"
+      )
+      if ($DryRun) { $cloneArgs += "--dry-run" }
+      Invoke-Checked -CargoArgs $cloneArgs
+      Assert-Metrics -MetricsPath $cloneMetrics -WavPath $cloneWav -ExpectedClone $true -ExpectedDryRun ([bool]$DryRun)
+      Write-Host "  [gate] prompt-only clone gate passed structural checks." -ForegroundColor Green
+    }
+
+    # 3. Combined (ref + prompt) for ultimate cloning gate (new)
+    if ($hasRef -and $hasPrompt) {
+      $cloneWav = Join-Path $outRoot.FullName "clone_combined_seed99.wav"
+      $cloneMetrics = Join-Path $outRoot.FullName "clone_combined_seed99.metrics.json"
+      $cloneArgs = @(
+        "run", "-p", "voxcpm2-cli"
+      ) + $featureArgs + @(
+        "--", "clone",
+        "--model-dir", $ModelDir,
+        "--device", $Device,
+        "--ref-audio", $RefAudio,
+        "--prompt-audio", $PromptAudio,
+        "--prompt-text", $PromptText,
+        "--text", "这是结合参考音色与提示音频的接续克隆测试。",
+        "--i-have-consent",
+        "--out", $cloneWav,
+        "--metrics-out", $cloneMetrics,
+        "--steps", "$Steps",
+        "--seed", "$Seed"
+      )
+      if ($DryRun) { $cloneArgs += "--dry-run" }
+      Invoke-Checked -CargoArgs $cloneArgs
+      Assert-Metrics -MetricsPath $cloneMetrics -WavPath $cloneWav -ExpectedClone $true -ExpectedDryRun ([bool]$DryRun)
+      Write-Host "  [gate] combined (ref+prompt) clone gate passed structural checks." -ForegroundColor Green
+    }
   }
 }
 

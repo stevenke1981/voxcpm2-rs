@@ -285,3 +285,4 @@
 - `pipeline.rs: project_text_to_feat()` — 舊 cond_proj transpose 投影（可隨 Z7 移除）
 - `LocDiT::generate()` — 已移除（由 UnifiedCFM 取代）
 - `FlowMatchingScheduler` — 保留 `pub use` 以便下游向後相容；Z7 後將移除
+- [x] (2026-07-02) 專案對齊檢查完成（詳 docs/todos.md 底部）：核心 AR/CFM/clone/polish 與原始 VoxCPM2 對齊；推薦參數下輸出無雜音（quiet RMS 低、ASR pass）。剩餘 prompt/combined gate + release docs。

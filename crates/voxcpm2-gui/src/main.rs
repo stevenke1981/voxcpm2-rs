@@ -72,6 +72,7 @@ impl Default for VoxApp {
                 steps: 30,
                 similarity: 1.0,
                 t_scheduler: "uniform".into(),
+                // Example for combined: set prompt_audio_path + prompt_text in UI at runtime
                 ..Default::default()
             },
             output_tab: OutputTab {

@@ -142,3 +142,37 @@ GUI clone 目前仍只暴露 reference-only 操作；prompt-only 與 combined �
 3. **seed 品質差異**：CFM 初始亂數種子會影響 AudioVAE 潛在分佈。`--seed 100`（預設）經測試可達最佳語音品質（speech energy 73.9%）。部分 seed（如 42）會產生較多低頻雜音。此問題根因是 Rust AR loop 產生的 latent std（~1.8）比 Python 參考（~0.87）高約 2 倍，導致 AudioVAE ConvTranspose1d 在 BF16 CUDA 下峰值過高。
 4. 真正可用的 TTS 需要完成張量名稱對應、每層 forward、Flow Matching / Euler scheduler、AudioVAE decoder。
 5. 聲音克隆能力涉及濫用風險；CLI 強制要求 `--i-have-consent`，GUI 與 CLI 預設加入 `--label-ai-generated` 與安全提示。
+
+## 釋出與可攜式包
+
+使用 `harness/build_windows_portable.ps1` 產生 Windows 可攜式 zip（包含 CLI 二進位、快速開始、安全注意事項與 FAQ 摘要）。
+
+```powershell
+./harness/build_windows_portable.ps1
+# 輸出在 dist/voxcpm2-rust-candle-portable-*.zip （不含模型，需自行下載）
+```
+
+執行後的 zip 內有 `SAFETY_AND_QUICKSTART.txt` 與 `FAQ.txt`。
+
+完整文件請見 `docs/FAQ.md` 與 `docs/SAFETY.md`（或根目錄更新後的說明）。
+
+## Prompt / Combined Clone（新支援完整 gate）
+
+CLI 與 pipeline 完整支援：
+- `--ref-audio` + `--text` （reference-only）
+- `--prompt-audio` + `--prompt-text` + `--text` （prompt-only continuation）
+- 兩者同時提供（combined ultimate cloning）
+
+GUI Clone 分頁已加入 Prompt audio / Prompt text 欄位，可即時切換三種模式。
+
+Harness 已擴充 `audio_quality_gate.ps1` 支援 prompt-only 與 combined 模式的結構與 metrics 驗證（傳入 `-PromptAudio` `-PromptText` 即可）。
+
+完整 ASR 驗收建議搭配 `harness/write_acceptance_baseline.ps1 -RunAsr -Seed 99` 使用。
+
+## 速度基準
+
+```powershell
+./harness/benchmark_cuda.ps1 -Release
+# 會輸出 RTF（Real-Time Factor）
+```
+
